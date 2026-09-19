@@ -520,6 +520,10 @@ final class UserSettings {
             Keys.aiAssistantPanelWidth,
             Keys.sidebarWidth,
             Keys.appFontName,
+            "panel.fontName",
+            "panel.fontSize",
+            "panel.lineSpacing",
+            "panel.letterSpacing",
             Keys.aiAssistantEnabled,
             Keys.aiAssistantCLIType,
             Keys.aiCLIPath

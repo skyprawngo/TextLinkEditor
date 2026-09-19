@@ -182,24 +182,10 @@ struct FileSystemItemRow: View {
             .cornerRadius(4)
         }
         // 드롭 타겟 (폴더에만)
-        .dropDestination(for: String.self) { droppedItems, _ in
-            guard item.isDirectory,
-                  let urlString = droppedItems.first,
-                  let sourceURL = URL(string: urlString) else {
-                return false
-            }
-
-            // 자기 자신이나 자신의 하위 폴더로는 이동 불가
-            if sourceURL == item.url || item.url.path.hasPrefix(sourceURL.path + "/") {
-                return false
-            }
-
-            guard let sourceItem = findItemByURL?(sourceURL) else { return false }
-            return onMoveItem?(sourceItem, item) ?? false
-        } isTargeted: { targeted in
-            if item.isDirectory {
-                isDropTargeted = targeted
-            }
+        .onDrop(of: SidebarFileDrop.types, isTargeted: Binding(get: { isDropTargeted }, set: { isDropTargeted = $0 && item.isDirectory })) { providers in
+            SidebarFileDrop.accept(providers, destination: item, manager: fileSystemManager,
+                find: { findItemByURL?($0) }, move: { onMoveItem?($0, item) ?? false },
+                completion: { onCacheUpdate?() })
         }
     }
 

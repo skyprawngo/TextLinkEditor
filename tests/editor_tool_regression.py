@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Verify shared tool lifecycle, attribute deltas, undo and large-document layout."""
 from pathlib import Path
+from markdown_test_support import markdown_flags
 import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
 engine = root / 'TextlinkEditor/Services/Editor/TextEngine'
 views = root / 'TextlinkEditor/Views/MainEditor/EditorPanel/TextlinkTextView'
+markdown_sources = sorted((root / 'TextlinkEditor/Services/Editor/Markdown').glob('*.swift'))
 sources = [engine / name for name in ['TextDocument.swift', 'TextSelection.swift', 'ViewportManager.swift', 'EditorState.swift', 'EditorCommand.swift']]
 sources += sorted((engine / 'EditorState').glob('*.swift'))
 sources += [root / 'TextlinkEditor/Services/Core/EditorToolRegistry.swift']
+sources += markdown_sources
 sources += sorted((root / 'TextlinkEditor/Services/Editor/Scroll').glob('*.swift'))
 sources += [root / 'TextlinkEditor/Services/FileSystem/Workspace/WorkspaceFileEvents.swift']
 sources += [views / name for name in ['PreparedManuscript.swift', 'EditorToolBridge.swift', 'NativeManuscriptView.swift']]
@@ -33,6 +36,44 @@ view.execute(EditorCommand(.tool("display.markdownPreview")))
 expect(requestedPreview && view.string == "**원고**" && view.selectedRange() == beforePreviewSelection, "registered preview tool preserves source and selection")
 expect(view.undoManager?.canUndo == false, "preview tool does not create a manuscript undo entry")
 let manager = view.textLayoutManager!
+// Match the production selection delegate. Markdown marker visibility must not
+// reflow paragraphs underneath AppKit's range-selection geometry.
+final class MarkdownSelectionDelegate: NSObject, NSTextViewDelegate {
+    func textViewDidChangeSelection(_ notification: Notification) {
+        (notification.object as? NativeManuscriptTextView)?.refreshMarkdownRendering()
+    }
+}
+let selectionDelegate = MarkdownSelectionDelegate()
+view.delegate = selectionDelegate
+let selectionSource = "# **긴 제목 한글 😀**\n\n## **작품의 방향**\n\n" + String(repeating: "도시 생활과 던전 산업을 설명하는 긴 문장입니다. ", count: 12) + "\n\n## **던전과 공략**\n\n마지막 문단"
+view.load(selectionSource)
+view.applyDisplayStyle(.init(fontName: "Menlo", fontSize: 16, lineHeightMultiple: 1, letterSpacing: 0))
+view.setSelectedRange(.init(location: 0, length: 0))
+view.setMarkdownRendering(true)
+window.displayIfNeeded()
+RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+window.displayIfNeeded()
+let selectionStart = (selectionSource as NSString).range(of: "도시 생활").location + 3
+let selectionEnd = (selectionSource as NSString).range(of: "던전과 공략").location + 6
+let initialLines = view.visibleManuscriptLines().map { $0.1 }
+var selectionStyleEdits = 0
+let selectionObserver = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification, object: view.textStorage, queue: nil) { _ in selectionStyleEdits += 1 }
+for range in [NSRange(location: selectionStart, length: 8),
+              NSRange(location: selectionStart, length: selectionEnd - selectionStart),
+              NSRange(location: 3, length: selectionEnd - 3)] {
+    view.setSelectedRange(range, affinity: .downstream, stillSelecting: true)
+    view.refreshMarkdownRendering() // SwiftUI configuration after publishing selection.
+    window.displayIfNeeded()
+    expect(view.selectedRange() == range, "Markdown range selection retains source coordinates")
+    expect(view.visibleManuscriptLines().map { $0.1 } == initialLines, "Markdown range selection retains rendered line geometry")
+}
+expect(selectionStyleEdits == 0, "extending Markdown selection never rewrites layout attributes")
+view.setSelectedRange(.init(location: selectionStart, length: 0))
+expect(selectionStyleEdits > 0, "returning to a caret refreshes active-paragraph Markdown markers")
+NotificationCenter.default.removeObserver(selectionObserver)
+expect(view.string == selectionSource && view.undoManager?.canUndo == false, "selection presentation preserves manuscript and Undo")
+view.delegate = nil
+view.setMarkdownRendering(false)
 var events: [EditorToolBridge.Event] = []
 view.toolBridge.onEvent = { events.append($0) }
 func verifyCompleted(_ name: String) {
@@ -237,5 +278,5 @@ with tempfile.TemporaryDirectory(prefix='textlink-tool-tests-') as directory:
     main = directory / 'main.swift'
     main.write_text(prefix + harness)
     executable = directory / 'test'
-    subprocess.run(['swiftc', '-O', *map(str, sources), str(main), '-o', str(executable)], check=True)
+    subprocess.run(['swiftc', *markdown_flags(), '-O', *map(str, sources), str(main), '-o', str(executable)], check=True)
     subprocess.run([str(executable)], check=True)

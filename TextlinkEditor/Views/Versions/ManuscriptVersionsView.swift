@@ -15,16 +15,10 @@ struct ManuscriptVersionsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading) {
-                    Text(L10n.get("versions.title")).font(.headline)
-                    Text(documentURL.lastPathComponent).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
+            SheetHeader(title: L10n.get("versions.title"), subtitle: documentURL.lastPathComponent, close: { dismiss() }) {
                 if draftContent != nil {
                     Button(L10n.get("versions.capture"), systemImage: "plus") { captureDraft() }.disabled(isWorking)
                 }
-                Button(L10n.get("versions.done")) { dismiss() }.keyboardShortcut(.cancelAction)
             }.padding()
             HSplitView {
                 List(snapshots, selection: $selectedID) { snapshot in

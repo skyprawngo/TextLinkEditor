@@ -16,25 +16,26 @@ enum AIRequestPreparationError: LocalizedError {
 struct AIRequestPreparer {
     func prepare(requestInput: String, type: AICLIType, projectURL: URL, assistantId: UUID,
                  inlineRevision: ManuscriptRevision?, attachDocument: Bool, messages: [AIMessage],
-                 taggedCardIds: Set<UUID>, existingSession: String?, continueFromCardId: UUID?) throws -> PreparedAIRequest {
+                 taggedCardIds: Set<UUID>, existingSession: String?, continueFromCardId: UUID?, chatMode: AIChatMode = .conversation) throws -> PreparedAIRequest {
         var context: [(question: String, answer: String)] = []
         var question: AIMessage?
         for message in messages {
             if message.role == .user { question = message }
             else if message.role == .assistant, message.outcome == nil || message.outcome == "completed", let question {
                 let root = question.conversationId ?? question.id
-                if taggedCardIds.contains(root) || (existingSession == nil && root == continueFromCardId) {
+                if taggedCardIds.contains(root) || root == continueFromCardId {
                     context.append((question.content, message.content))
                 }
             }
         }
-        let allowsWorkspaceEdits = inlineRevision == nil
+        let allowsWorkspaceEdits = inlineRevision == nil && chatMode == .write
         var workspaceBefore: [String: String]?
         if allowsWorkspaceEdits {
             workspaceBefore = try AIWorkspaceEdits.prepare(id: assistantId, project: projectURL)
         }
         var prompt = AIPromptTemplateManager.shared.buildPromptWithContext(userInput: requestInput, taggedCards: context, cliType: type)
         if inlineRevision == nil {
+            prompt += "\n\n" + chatMode.instruction
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.withoutEscapingSlashes]
             let root = String(decoding: try encoder.encode(projectURL.path), as: UTF8.self)

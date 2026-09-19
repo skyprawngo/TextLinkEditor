@@ -163,7 +163,7 @@ struct AIConnectionSettingsContent: View {
                     }
                 }
                 ForEach(AIConversationCategory.allCases, id: \.self) { category in
-                    Section(L10n.get(category == .chat ? "ai.settings.sidebar" : "ai.settings.inline")) {
+                    Section(L10n.get(category == .chat ? "ai.settings.sidebar" : category == .inlineEdit ? "ai.settings.inline" : "git.aiModel")) {
                         Picker(L10n.get("ai.model.title"), selection: Binding(
                             get: { viewModel.selectedModel(for: cliType, category: category)?.id ?? "" },
                             set: { viewModel.selectModel($0, for: cliType, category: category) })) {
@@ -185,7 +185,7 @@ struct AIConnectionSettingsContent: View {
                             }
                         }
                         .disabled(viewModel.selectedModel(for: cliType, category: category)?.efforts.isEmpty ?? true)
-                        Text(L10n.get("ai.settings.separateDefaults")).font(.caption).foregroundStyle(.secondary)
+                        Text(L10n.get(category == .commitMessage ? "git.autoCommitHint" : "ai.settings.separateDefaults")).font(.caption).foregroundStyle(.secondary)
                         if cliType == .chatgpt {
                             Button(L10n.get("ai.model.refresh")) { Task { await viewModel.refreshModels() } }
                         }

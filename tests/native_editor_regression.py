@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Exercise actual NSTextView navigation/editing and report large-document layout costs."""
 from pathlib import Path
+from markdown_test_support import markdown_flags
 import subprocess, tempfile
 root = Path(__file__).resolve().parents[1]
 engine = root / 'TextlinkEditor/Services/Editor/TextEngine'
 views = root / 'TextlinkEditor/Views/MainEditor/EditorPanel/TextlinkTextView'
+markdown_sources = sorted((root / 'TextlinkEditor/Services/Editor/Markdown').glob('*.swift'))
 sources = [engine / name for name in ['TextDocument.swift','TextSelection.swift','ViewportManager.swift','EditorState.swift','EditorCommand.swift']]
 sources += sorted((engine / 'EditorState').glob('*.swift'))
 sources += [root / 'TextlinkEditor/Services/Core/EditorToolRegistry.swift']
+sources += markdown_sources
 sources += sorted((root / 'TextlinkEditor/Services/Editor/Scroll').glob('*.swift'))
 sources += [root / 'TextlinkEditor/Services/FileSystem/Workspace/WorkspaceFileEvents.swift']
 sources += [views / 'PreparedManuscript.swift', views / 'EditorToolBridge.swift', views / 'NativeManuscriptView.swift']
@@ -262,5 +265,5 @@ with tempfile.TemporaryDirectory(prefix='lore-native-test-') as directory:
     directory = Path(directory)
     main = directory/'main.swift'; main.write_text(prefix + harness)
     executable = directory/'test'
-    subprocess.run(['swiftc','-O',*map(str,sources),str(main),'-o',str(executable)],check=True)
+    subprocess.run(['swiftc', *markdown_flags(),'-O',*map(str,sources),str(main),'-o',str(executable)],check=True)
     subprocess.run([str(executable)],check=True)

@@ -114,7 +114,7 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
                 native.setSelectedRange(NSRange(location: native.offset(line: position.line, column: position.column), length: 0))
             }
             host.documentView = native
-            native.frame.size.width = host.contentSize.width
+            host.tile()
             native.delegate = coordinator
             coordinator.pendingText = nil
         } else if contentChanged && coordinator.pendingText == nil && host.textView.string != text {
@@ -145,12 +145,13 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
     }
 
     private func configure(_ view: NativeManuscriptTextView) {
-        view.setMarkdownRendering(rendersMarkdown)
         view.isEditable = isEditable
         view.isSelectable = true
         view.onToolPresentation = onToolPresentation
         view.applyDisplayStyle(EditorDisplayStyle(fontName: fontName, fontSize: fontSize,
                                                  lineHeightMultiple: lineHeightMultiple, letterSpacing: letterSpacing))
+        // Resolve base appearance before the presentation module derives Markdown attributes.
+        view.setMarkdownRendering(rendersMarkdown)
         view.refreshMarkdownRendering()
     }
 

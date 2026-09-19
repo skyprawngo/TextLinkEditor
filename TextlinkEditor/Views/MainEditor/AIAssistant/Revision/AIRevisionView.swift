@@ -11,11 +11,7 @@ struct AIWorkspaceRevisionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(L10n.get("revision.title")).font(.title2)
-                Spacer()
-                Button(L10n.get("common.close")) { dismiss() }.keyboardShortcut(.cancelAction)
-            }
+            SheetHeader(title: L10n.get("revision.title")) { dismiss() }
             Text(L10n.get("revision.savedExplanation")).font(.callout).foregroundStyle(.secondary)
             if record.changes.isEmpty {
                 ContentUnavailableView(L10n.get("revision.noChanges"), systemImage: "doc.text.magnifyingglass")

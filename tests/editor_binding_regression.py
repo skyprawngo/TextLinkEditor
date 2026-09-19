@@ -6,15 +6,18 @@ and Context construction are replaced; make/update/coordinator/callback bodies a
 read from production unchanged. This is not a SwiftUI scheduling/UI test.
 """
 from pathlib import Path
+from markdown_test_support import markdown_flags
 import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
 engine = root / 'TextlinkEditor/Services/Editor/TextEngine'
 views = root / 'TextlinkEditor/Views/MainEditor/EditorPanel/TextlinkTextView'
+markdown_sources = sorted((root / 'TextlinkEditor/Services/Editor/Markdown').glob('*.swift'))
 sources = [engine / name for name in ['TextDocument.swift', 'TextSelection.swift', 'ViewportManager.swift', 'EditorState.swift', 'EditorCommand.swift']]
 sources += sorted((engine / 'EditorState').glob('*.swift'))
 sources += [root / 'TextlinkEditor/Services/Core/EditorToolRegistry.swift']
+sources += markdown_sources
 sources += sorted((root / 'TextlinkEditor/Services/Editor/Scroll').glob('*.swift'))
 sources += [root / 'TextlinkEditor/Services/FileSystem/Workspace/WorkspaceFileEvents.swift']
 sources += [views / 'PreparedManuscript.swift', views / 'EditorToolBridge.swift', views / 'NativeManuscriptView.swift']
@@ -242,6 +245,11 @@ live.setMarkdownRendering(true)
 expect(live.isEditable && live.string == rawMarkdown && live.lineStarts.count == 5, "formatted mode keeps editable source and line numbers")
 let boldFont = live.textStorage!.attribute(.font, at: 2, effectiveRange: nil) as! NSFont
 expect(NSFontManager.shared.traits(of: boldFont).contains(.boldFontMask), "formatted editor applies bold")
+live.isEditable = true
+live.isSelectable = true
+live.refreshMarkdownRendering()
+let updatedBold = live.textStorage!.attribute(.font, at: 2, effectiveRange: nil) as! NSFont
+expect(NSFontManager.shared.traits(of: updatedBold).contains(.boldFontMask), "view configuration must retain formatted bold")
 let spacing = live.textStorage!.attribute(.paragraphStyle, at: 2, effectiveRange: nil) as! NSParagraphStyle
 expect(spacing.lineHeightMultiple == 1.25, "formatted mode uses the same editor line spacing")
 expect(!live.undoManager!.canUndo, "display toggle does not add undo entries")
@@ -252,8 +260,85 @@ expect(live.string == rawMarkdown, "formatted edit supports native undo")
 live.setMarkdownRendering(false)
 let markerFont = live.textStorage!.attribute(.font, at: 0, effectiveRange: nil) as! NSFont
 expect(markerFont.pointSize == 14 && live.string == rawMarkdown, "source mode restores visible syntax without rewriting text")
+let headings = "# 제목 **굵게**\n## 소제목\n본문 **강조**\n끝"
+live.load(headings)
+// Match the representable's first-update order: mode arrives before display style.
+live.setMarkdownRendering(true)
+live.applyDisplayStyle(EditorDisplayStyle(fontName: "SF Pro", fontSize: 16, lineHeightMultiple: 1, letterSpacing: 0))
+live.refreshMarkdownRendering()
+func markdownFont(_ word: String) -> NSFont {
+    live.textStorage!.attribute(.font, at: (live.string as NSString).range(of: word).location, effectiveRange: nil) as! NSFont
+}
+expect(markdownFont("제목").pointSize > markdownFont("소제목").pointSize && markdownFont("소제목").pointSize > 16,
+       "ATX heading levels render with distinct sizes")
+expect(NSFontManager.shared.traits(of: markdownFont("강조")).contains(.boldFontMask), "Korean body bold renders with system font")
+expect(markdownFont("굵게").pointSize == markdownFont("제목").pointSize, "inline bold retains heading size")
+live.applyDisplayStyle(EditorDisplayStyle(fontName: "SF Pro", fontSize: 20, lineHeightMultiple: 1.4, letterSpacing: 1))
+expect(markdownFont("제목").pointSize == 36, "font changes invalidate heading styling")
+live.setMarkdownRendering(false)
+expect(markdownFont("제목").pointSize == 20 && live.string == headings, "source toggle restores body font without modifying source")
+live.setMarkdownRendering(true)
+expect(markdownFont("제목").pointSize == 36, "repeated toggle restores heading style")
+let codeSource = "~~~md\n# 코드 **literal**\n~~~\n\\# escaped\n####### invalid\n# 실제"
+live.load(codeSource)
+live.applyDisplayStyle(EditorDisplayStyle(fontName: "SF Pro", fontSize: 16, lineHeightMultiple: 1, letterSpacing: 0))
+live.refreshMarkdownRendering()
+expect(markdownFont("코드").pointSize == 16 && markdownFont("literal").pointSize == 16,
+       "fenced heading and emphasis remain literal")
+expect(markdownFont("escaped").pointSize == 16 && markdownFont("invalid").pointSize == 16,
+       "escaped and invalid heading markers remain source")
+expect(markdownFont("실제").pointSize > 16, "heading resumes after code fence")
+live.load("[링크](https://example.com) `code` *기울임*\n끝")
+live.applyDisplayStyle(EditorDisplayStyle(fontName: "SF Pro", fontSize: 16, lineHeightMultiple: 1, letterSpacing: 0))
+live.refreshMarkdownRendering()
+expect(live.textStorage!.attribute(.link, at: 1, effectiveRange: nil) != nil, "formatted mode activates safe links")
+live.setMarkdownRendering(false)
+for key in MarkdownSourceStyling.ownedKeys {
+    var found = false
+    live.textStorage!.enumerateAttribute(key, in: NSRange(location: 0, length: live.textStorage!.length)) { value, _, _ in
+        if value != nil { found = true }
+    }
+    expect(!found, "source mode clears all parser-owned presentation attributes")
+}
 // Persist a viewport independently of the cursor and recreate the entire native view.
 _ = NSApplication.shared
+// Tab installation must fit the clip view after rulers/scrollers are tiled.
+let widthWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 650, height: 400),
+    styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+widthWindow.isReleasedWhenClosed = false
+active.value = (a, urlA)
+content.value = String(repeating: "줄바꿈 폭을 확인하는 긴 원고 문장입니다. ", count: 100)
+let widthParent = parent(a, urlA)
+let widthCoordinator = widthParent.makeCoordinator()
+let widthContext = TextlinkEditorRepresentable.Context(coordinator: widthCoordinator)
+let widthHost = widthParent.makeNSView(context: widthContext)
+widthWindow.contentView = widthHost
+widthWindow.orderFront(nil)
+for style: NSScroller.Style in [.overlay, .legacy] {
+    widthHost.scrollerStyle = style
+    for width: CGFloat in [650, 420, 850] {
+        widthWindow.setContentSize(NSSize(width: width, height: 400))
+        for id in [b, a, b, a] {
+            let url = id == a ? urlA : urlB
+            active.value = (id, url)
+            parent(id, url).updateNSView(widthHost, context: widthContext)
+            let clip = widthHost.contentView
+            let availableWidth = clip.bounds.width - clip.contentInsets.left - clip.contentInsets.right
+            expect(abs(widthHost.textView.frame.width - availableWidth) < 1,
+                "tab installation fits before deferred layout and viewport restoration")
+            widthWindow.displayIfNeeded()
+            drain()
+            expect(abs(widthHost.textView.frame.width - availableWidth) < 1,
+                "new and cached tabs fit the actual clip width with rulers and scrollers")
+            let left = NSRect(x: -10000, y: clip.bounds.minY, width: clip.bounds.width, height: clip.bounds.height)
+            let right = NSRect(x: 10000, y: clip.bounds.minY, width: clip.bounds.width, height: clip.bounds.height)
+            expect(abs(clip.constrainBoundsRect(left).minX - clip.constrainBoundsRect(right).minX) < 1,
+                "tab switch leaves no horizontal scroll range")
+        }
+    }
+}
+TextlinkEditorRepresentable.dismantleNSView(widthHost, coordinator: widthCoordinator)
+widthWindow.close()
 active.value = (b, urlB)
 content.value = (1...200).map { "row \($0) 한글" }.joined(separator: "\n")
 let savedViewport = EditorViewportPosition(firstVisibleLine: 80, firstLineText: "row 80 한글", offsetWithinLine: 0)
@@ -355,5 +440,5 @@ with tempfile.TemporaryDirectory(prefix='lore-binding-tests-') as directory:
     main = directory / 'main.swift'
     main.write_text(harness)
     executable = directory / 'test'
-    subprocess.run(['swiftc', *map(str, sources), str(adapter), str(main), '-o', str(executable)], check=True)
+    subprocess.run(['swiftc', *markdown_flags(), *map(str, sources), str(adapter), str(main), '-o', str(executable)], check=True)
     subprocess.run([str(executable)], check=True)

@@ -18,21 +18,7 @@ struct TermsOfServiceView: View {
     var body: some View {
         VStack(spacing: 0) {
             // 헤더
-            HStack {
-                Text(L10n.get("terms.title"))
-                    .font(.headline)
-
-                Spacer()
-
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(AppColors.toolbarIcon)
-                        .font(.title2)
-                }
-                .buttonStyle(.plain)
-            }
+            SheetHeader(title: L10n.get("terms.title")) { dismiss() }
             .padding()
             .background(.bar)
 

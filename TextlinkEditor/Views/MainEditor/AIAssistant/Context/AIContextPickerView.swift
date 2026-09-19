@@ -13,11 +13,7 @@ struct AIContextPickerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(L10n.get("ai.context.title")).font(.title2.bold())
-                Spacer()
-                Button(L10n.get("ai.context.done")) { dismiss() }.keyboardShortcut(.defaultAction)
-            }
+            SheetHeader(title: L10n.get("ai.context.title")) { dismiss() }
             Text(L10n.get("ai.context.explanation"))
                 .font(.callout).foregroundStyle(.secondary)
             Stepper(value: Binding(get: { selection.scene(projectURL: projectURL) }, set: { selection.setScene($0, projectURL: projectURL); refresh() }), in: 0...100000) {

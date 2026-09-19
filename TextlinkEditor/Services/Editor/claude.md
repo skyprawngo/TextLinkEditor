@@ -60,7 +60,13 @@ SwiftUI가 전달한 도구 명령은 `updateNSView` 안에서 실행하지 않�
 
 `display.markdownPreview`는 호환성을 위해 유지한 표시 전환 도구 ID이며 기본 키는 지정하지 않는다. 서식 모드도 동일한 `NativeManuscriptTextView`를 사용하므로 줄번호·줄간격·입력·저장·Undo·AI 요청의 소유권이 갈라지지 않는다. Markdown 원문은 저장소에 그대로 두고 `MarkdownSourceStyling`이 글꼴과 장식 속성만 적용한다. 커서가 있는 문단의 구문 기호는 옅게 표시하고 다른 문단의 기호는 축소·투명 처리한다. 따라서 클릭/방향키의 위치는 계속 원문 오프셋이며 별도의 리치 텍스트 직렬화는 없다.
 
-굵게·기울임·굵은 기울임·취소선·밑줄의 인라인 표기를 지원하며 코드와 이스케이프 표기는 보존한다. 전체 CommonMark 블록/중첩 문법 구현은 아니다. IME 조합 중에는 서식 재적용을 보류한다. 표시 전환은 Undo 항목을 만들지 않는다. `tests/editor_binding_regression.py`는 서식 편집·원문 유지·줄간격·Undo·원문 모드 복원을 검증한다.
+`Markdown/MarkdownSyntaxDocument`는 버전 고정한 `swift-markdown` 0.8.0의 CommonMark/GFM AST를 원문 UTF-16 범위로 변환한다. 파서의 열 위치는 UTF-8 바이트이므로 한글·이모지·CRLF 변환을 거친다. `Markdown/MarkdownPresentationController`는 표시 모드·갱신과 문서 세대별 파싱 캐시를 소유한다. 커서나 글꼴만 바뀌면 다시 파싱하지 않는다. `Markdown/MarkdownSourceStyling`은 범위에 대응하는 속성만 적용한다. 네이티브 뷰는 입력·Undo와 모듈 호출을 담당하며 툴바/단축키는 공통 `display.markdownPreview` 도구를 통한다. 문서 저장이나 SwiftUI 상태를 서식 모듈에서 변경하지 않는다.
+
+ATX/Setext 제목, 중첩 강조·취소선, 인용문·목록·체크리스트, 들여쓰기/펜스/인라인 코드, GFM 표, 인라인/참조/자동 링크, 이미지·HTML·구분선·줄바꿈의 해석을 표준 파서에 위임한다. 기존 `<u>` 도구는 제한된 밑줄 확장으로 유지한다. CJK 대체 글꼴에 기울임체가 없으면 obliqueness로 표시한다. IME 조합 중에는 서식 재적용을 보류하며 보기 전환은 원문과 Undo 이력을 바꾸지 않는다.
+
+이 화면은 원문 보존형 편집기이지 HTML 미리보기가 아니다. 표는 고정폭/헤더 서식으로, 목록·체크박스·구분선은 원문 기호로 표시한다. 이미지의 실제 삽입·외부 다운로드, HTML 실행, 엔티티 치환, 표 셀 격자 재배치는 하지 않는다. 링크는 http/https/mailto만 활성화하고 다른 목적지는 텍스트로 유지한다. 수식·Mermaid·위키링크·각주 등 GFM 밖의 확장은 아직 렌더링하지 않는다. 따라서 모든 Markdown 방언의 완전한 시각적 렌더링을 보장하지 않는다.
+
+`tests/markdown_regression.py`는 AST 범주·유니코드 위치·중첩 서식·코드 격리·안전한 링크를, `tests/editor_binding_regression.py`는 원문 보존·Undo·원문 모드 복원을 검증한다. 네이티브 회귀 실행기는 `tests/markdown_test_support.py`로 앱과 같은 파서를 빌드·링크한다. 표준 파서 업데이트 시 앱과 테스트의 고정 버전을 함께 변경한다.
 
 ## 버전과 프로젝트 바꾸기
 

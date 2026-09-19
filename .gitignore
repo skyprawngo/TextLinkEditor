@@ -2,3 +2,11 @@
 **/xcuserdata/
 *.xcuserstate
 /TextlinkEditor.xcworkspace
+/tests/markdown/.build/
+/tests/__pycache__/
+
+# Update-service local runtime files
+__pycache__/
+server/update_service/.venv/
+server/update_service/data/
+server/update_service/incoming/

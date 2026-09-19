@@ -10,7 +10,7 @@ struct ProjectGitChange: Identifiable, Equatable, Sendable {
     var isText: Bool { ["md", "txt", "markdown"].contains((path as NSString).pathExtension.lowercased()) }
 }
 
-struct ProjectGitCommit: Identifiable, Sendable {
+struct ProjectGitCommit: Identifiable, Equatable, Sendable {
     let id: String
     let parents: [String]
     let refs: String
@@ -20,12 +20,17 @@ struct ProjectGitCommit: Identifiable, Sendable {
     var lane = 0
     var lines: [ProjectGitLine] = []
 }
-struct ProjectGitLine: Sendable { let from: Int; let to: Int }
-struct ProjectGitSnapshot: Sendable {
+struct ProjectGitLine: Equatable, Sendable { let from: Int; let to: Int }
+struct ProjectGitSnapshot: Equatable, Sendable {
     var exists = false
     var branch = ""
     var changes: [ProjectGitChange] = []
     var commits: [ProjectGitCommit] = []
+}
+struct ProjectGitCommitInput: Equatable, Sendable {
+    let index: String
+    let head: String
+    let patch: String
 }
 enum ProjectGitScope: String, CaseIterable, Identifiable, Sendable {
     case working, staged
@@ -43,13 +48,14 @@ struct ProjectGitDiff: Identifiable, Sendable {
 }
 
 enum ProjectGitError: LocalizedError {
-    case command, rootMismatch, unsafePath, changed, binary, tooLarge
+    case command, rootMismatch, unsafePath, changed, binary, tooLarge, noUpstream, pushFailed
     var errorDescription: String? { L10n.get("git.error." + String(describing: self)) }
 }
 
 /// Argument-only Git access. Never creates a repository or changes the index
 /// during inspection. App metadata and symlinks are not document targets.
 struct ProjectGitRepository: Sendable {
+    struct PushTarget: Equatable, Sendable { let branch: String; let remote: String; let ref: String }
     let project: URL
     static func safePath(_ path: String) -> Bool {
         !path.isEmpty && !path.split(separator: "/", omittingEmptySubsequences: false).contains {
@@ -75,8 +81,13 @@ struct ProjectGitRepository: Sendable {
         }
         return true
     }
-    func snapshot() throws -> ProjectGitSnapshot {
-        guard try validateRoot() else { return .init() }
+    func snapshot(repositoryExists: Bool? = nil) throws -> ProjectGitSnapshot {
+        let exists = try repositoryExists ?? validateRoot()
+        guard exists else { return .init() }
+        // A cached root must never fall back to an enclosing repository if .git is removed.
+        guard FileManager.default.fileExists(atPath: project.appendingPathComponent(".git").path) else {
+            throw ProjectGitError.changed
+        }
         let branch = (try? text(["symbolic-ref", "--short", "HEAD"])) ?? ((try? text(["rev-parse", "--short", "HEAD"])) ?? "HEAD")
         let data = try run(["-c", "status.renames=false", "status", "--porcelain=v1", "-z", "--untracked-files=all"])
         let changes = try Self.parseStatus(data)
@@ -171,9 +182,36 @@ struct ProjectGitRepository: Sendable {
         guard !paths.isEmpty, paths.allSatisfy({ Self.safePath(String(decoding: $0, as: UTF8.self)) }) else { throw ProjectGitError.unsafePath }
         _ = try run(["commit", "-m", message])
     }
+    func commitInput() throws -> ProjectGitCommitInput {
+        guard try validateRoot() else { throw ProjectGitError.command }
+        let paths = try run(["diff", "--cached", "--name-only", "-z"]).split(separator: 0)
+        guard !paths.isEmpty, paths.allSatisfy({ Self.safePath(String(decoding: $0, as: UTF8.self)) }) else { throw ProjectGitError.unsafePath }
+        let patch = try text(["diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "--"])
+        guard patch.utf8.count <= 500_000 else { throw ProjectGitError.tooLarge }
+        return .init(index: try text(["ls-files", "--stage", "-z"]),
+                     head: ((try? text(["rev-parse", "--verify", "HEAD"])) ?? "") + "\n" + ((try? text(["symbolic-ref", "HEAD"])) ?? ""), patch: patch)
+    }
+    func commit(_ message: String, matching input: ProjectGitCommitInput) throws {
+        guard try commitInput() == input else { throw ProjectGitError.changed }
+        try commit(message)
+    }
     func commitPatch(_ id: String) throws -> String {
         guard !id.isEmpty, id.allSatisfy({ $0.isHexDigit }), try validateRoot() else { throw ProjectGitError.unsafePath }
         return try text(["show", "--no-ext-diff", "--no-textconv", "--format=fuller", "--stat", "--patch", id, "--"])
+    }
+    func pushTarget() throws -> PushTarget {
+        guard try validateRoot(), let branch = try? text(["symbolic-ref", "HEAD"]), branch.hasPrefix("refs/heads/") else { throw ProjectGitError.noUpstream }
+        let remote = try text(["for-each-ref", "--format=%(upstream:remotename)", branch])
+        let ref = try text(["for-each-ref", "--format=%(upstream:remoteref)", branch])
+        guard !remote.isEmpty, remote != ".", !remote.hasPrefix("-"), ref.hasPrefix("refs/heads/") else { throw ProjectGitError.noUpstream }
+        return .init(branch: branch, remote: remote, ref: ref)
+    }
+    func head() throws -> String { try text(["rev-parse", "--verify", "HEAD"]) }
+    func push(to target: PushTarget, expectedHead: String) throws {
+        guard try pushTarget() == target, try head() == expectedHead else { throw ProjectGitError.changed }
+        // Explicit refspec avoids push.default/matching and never forces a remote rewrite.
+        do { _ = try run(["-c", "remote.\(target.remote).mirror=false", "push", "--no-follow-tags", "--", target.remote, expectedHead + ":" + target.ref]) }
+        catch { throw ProjectGitError.pushFailed }
     }
     private func text(_ args: [String]) throws -> String { String(decoding: try run(args), as: UTF8.self).trimmingCharacters(in: .newlines) }
     private func run(_ args: [String]) throws -> Data {

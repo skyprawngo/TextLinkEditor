@@ -304,6 +304,7 @@ final class FileSystemManager {
 
         // 파일이 실제로 존재하는지 확인
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            stopWatching(under: fileURL)
             print("File does not exist at path: \(fileURL.path)")
             // 부모의 children에서 제거 (UI 정리)
             if let parent = item.parent {
@@ -315,6 +316,7 @@ final class FileSystemManager {
 
         do {
             guard try files.trash(fileURL) else { return false }
+            stopWatching(under: fileURL)
             if item.isDirectory, let projectRootURL {
                 do { try FolderAppearanceStore(projectURL: projectRootURL).remove(for: fileURL) }
                 catch { operationError = error.localizedDescription }
@@ -447,7 +449,8 @@ final class FileSystemManager {
         let owner = projectRootURL
         let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .delete, .rename], queue: .main)
         source.setEventHandler { [weak self, weak item] in
-            guard let self, let item, self.projectRootURL == owner else { return }
+            guard let self, let item, self.projectRootURL == owner,
+                  self.directoryWatchers[path] != nil, item.url.path == path else { return }
             self.files.events.publish(.init(url: item.url, change: .invalidated))
             self.loadChildren(of: item)
         }
@@ -459,6 +462,12 @@ final class FileSystemManager {
     private func stopWatching() {
         for source in directoryWatchers.values { source.cancel() }
         directoryWatchers.removeAll()
+    }
+
+    private func stopWatching(under url: URL) {
+        for path in Array(directoryWatchers.keys) where DocumentFileStore.contains(URL(fileURLWithPath: path), in: url) {
+            directoryWatchers.removeValue(forKey: path)?.cancel()
+        }
     }
 
     /// 파일 시스템 변경 처리

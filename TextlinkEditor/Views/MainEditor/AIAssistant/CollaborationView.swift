@@ -163,11 +163,7 @@ private struct CollaborationReviewView: View {
     @State private var error: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(L10n.get("collaboration.compare")).font(.headline)
-                Spacer()
-                Button(L10n.get("common.close")) { dismiss() }
-            }
+            SheetHeader(title: L10n.get("collaboration.compare")) { dismiss() }
             if let error { Text(error).foregroundStyle(.red) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {

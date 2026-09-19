@@ -137,11 +137,7 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         let executable = folder.appendingPathComponent("claude")
         UserSettings.shared.path = executable
         func fixture(_ body: String) throws {
-            let proposal = ["summary": "new response", "edits": [], "questions": [], "facts": []] as [String: Any]
-            let json = String(decoding: try JSONSerialization.data(withJSONObject: proposal), as: UTF8.self)
-            let encoded = String(decoding: try JSONEncoder().encode(json), as: UTF8.self)
-            let adapted = body.replacingOccurrences(of: "\"result\":\"new response\"", with: "\"result\":" + encoded)
-                .replacingOccurrences(of: "> arguments.log", with: "> '" + folder.path + "/arguments.log'")
+            let adapted = body.replacingOccurrences(of: "> arguments.log", with: "> '" + folder.path + "/arguments.log'")
                 .replacingOccurrences(of: "> prompt.log", with: "> '" + folder.path + "/prompt.log'")
             try ("#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + folder.path + "/arguments.log'\n" + adapted).write(to: executable, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
@@ -222,10 +218,29 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         let separate = AIAssistantViewModel(modelDefaults: defaults)
         expect(separate.requestOptions(for: .claude).model == "sonnet" && separate.requestOptions(for: .claude).effort == "high", "sidebar preferences persist separately")
         expect(separate.requestOptions(for: .claude, category: .inlineEdit).model == "opus" && separate.requestOptions(for: .claude, category: .inlineEdit).effort == "low", "inline preferences persist separately")
+        vm.selectModel("haiku", for: .claude, category: .commitMessage)
+        let commitPreferences = AIAssistantViewModel(modelDefaults: defaults)
+        expect(commitPreferences.requestOptions(for: .claude, category: .commitMessage).model == "haiku" && commitPreferences.requestOptions(for: .claude).model == "sonnet", "commit model persists independently of chat")
+        let decodedCommitMessage = try AICommitMessage.decode(#"{"message":" Add worldbuilding "}"#)
+        expect(decodedCommitMessage == "Add worldbuilding", "generated commit message trims whitespace")
+        do { _ = try AICommitMessage.decode("{\"message\":\"  \"}"); preconditionFailure("empty commit message accepted") } catch {}
+        expect(true, "empty generated commit message rejected")
         vm.modelSelections = [:]
         vm.modelPreferences.effortSelections = [:]
         vm.completeConnection(.claude)
         vm.setProject(a)
+        let messageCountBeforeMode = vm.messages.count
+        vm.inputText = "/계획"
+        vm.sendMessage()
+        expect(vm.chatMode == .plan && !vm.isProcessing && vm.messages.count == messageCountBeforeMode, "mode-only command changes mode without inference or history turn")
+        expect(AIChatMode.parse("/계획 세계관 구상")?.body == "세계관 구상" && AIChatMode.parse("/plan")?.mode == .plan, "Korean and English slash commands parse")
+        expect(AIChatMode.parse("문장 속 /계획")?.body == "문장 속" && AIChatMode.parse("/계획서") == nil, "tags work after text without matching longer words")
+        let suffixTag = AIChatMode.parse("`지금까지 합의한 내용을 설정/세계관.md로 정리해 줘`/작성")
+        expect(suffixTag?.mode == .write && suffixTag?.body == "`지금까지 합의한 내용을 설정/세계관.md로 정리해 줘`", "attached suffix tag preserves quoted Korean body")
+        expect(AIChatMode.parse("던전/계획 규칙을\n구상해 줘")?.body == "던전 규칙을\n구상해 줘", "middle tag preserves multiline body")
+        expect(AIChatMode.parse("/계획 내용을 정리해 줘/작성")?.mode == .write && AIChatMode.parse("/계획 내용을 정리해 줘/작성")?.body == "내용을 정리해 줘", "last tag wins and all mode tags are removed")
+        expect(AIChatMode.parse("설정/작성.md https://example.com/plan") == nil, "file names and URL paths are not mode tags")
+        expect(AIChatMode.removingTagsForSelection("앞의 본문/작") == "앞의 본문" && AIChatMode.completionRange("앞의 본문/") != nil, "suffix tag picker preserves draft text")
         vm.inputText = "slow A request"
         vm.sendMessage()
         try await Task.sleep(nanoseconds: 100_000_000)
@@ -241,9 +256,17 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         if vm.messages.last?.content != "new response" { FileHandle.standardError.write(Data(("Fixture failure: " + (vm.errorMessage ?? "none") + " content=" + (vm.messages.last?.content ?? "nil") + "\n").utf8)) }
         expect(vm.messages.last?.content == "new response" && vm.selectedCardId == bUser.id, "Followup stays in selected conversation")
         expect(vm.messages.last?.conversationId == bUser.id, "Followup identity remains persisted")
+        vm.inputText = "던전의 규칙을 함께 구상하자/계획"
+        vm.sendMessage()
+        while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
+        let planningPrompt = try String(contentsOf: folder.appendingPathComponent("prompt.log"), encoding: .utf8)
+        expect(planningPrompt.contains("Current mode: planning") && planningPrompt.contains("B followup"), "planning retains completed conversation and explicit read-only mode")
+        expect(vm.messages.last?.content == "new response", "planning returns prose without proposal parsing")
+        expect(vm.messages.dropLast().last?.content == "던전의 규칙을 함께 구상하자" && vm.messages.dropLast().last?.chatMode == "plan", "suffix command persists as message tag instead of body text")
         vm.setProject(a)
         vm.setProject(b)
         expect(vm.selectedCardId == bUser.id, "Reopening project restores its latest normal chat")
+        expect(vm.chatMode == .plan, "conversation mode survives project reopen")
         vm.inputText = "resume from project files"
         vm.sendMessage()
         while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
@@ -422,6 +445,17 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         expect(AIWorkspaceEdits.load(id: cancelledID, project: workspace)?.changes.first?.after == "cancelled write", "partial writes remain comparable after cancellation")
         try ManuscriptRevisionBridge.remove(id: editID, project: workspace)
         expect(!AIWorkspaceEdits.exists(id: editID, project: workspace), "history cleanup removes actual revision records")
+        vm.completeConnection(.claude)
+        vm.selectModel("haiku", for: .claude, category: .commitMessage)
+        UserSettings.shared.path = executable
+        let commitEvent: [String: Any] = ["type": "result", "subtype": "success", "result": #"{"message":"Add dungeon setting"}"#]
+        let commitEventText = String(decoding: try JSONSerialization.data(withJSONObject: commitEvent), as: UTF8.self)
+        try fixture("cat > prompt.log\nprintf '%s\\n' '" + commitEventText + "'\n")
+        let historyBeforeCommit = vm.messages
+        let generatedCommit = try await vm.generateCommitMessage(patch: "+A dungeon floats in the sky.")
+        let commitArgs = try String(contentsOf: folder.appendingPathComponent("arguments.log"), encoding: .utf8)
+        expect(generatedCommit == "Add dungeon setting" && vm.messages == historyBeforeCommit, "commit generation uses common runtime without changing chat history")
+        expect(commitArgs.contains("haiku") && !commitArgs.contains("--resume") && !commitArgs.contains("Read,Glob,Grep"), "commit generation uses separate model and independent tool-free request")
         print("AI regression passed: \(assertions) assertions (fixtures only)")
     }
 }

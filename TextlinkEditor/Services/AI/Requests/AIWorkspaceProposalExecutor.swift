@@ -1,6 +1,6 @@
 import Foundation
 
-/// Ordinary chat shares collaboration's isolated proposal and transaction path.
+/// Discussion uses a read-only copy; writing shares collaboration's proposal and transaction path.
 @MainActor
 final class AIWorkspaceProposalExecutor: AIRequestExecuting {
     let base: any AIRequestExecuting
@@ -13,6 +13,19 @@ final class AIWorkspaceProposalExecutor: AIRequestExecuting {
                     allowsWorkspaceEdits: Bool, options: AIRequestOptions,
                     streamHandler: @escaping @MainActor @Sendable (String) -> Void) async throws -> CLIPromptResult {
         guard allowsWorkspaceEdits else {
+            if options.readsProjectFiles {
+                let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("TextlinkCollaboration-" + UUID().uuidString)
+                try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+                defer { try? FileManager.default.removeItem(at: temporary) }
+                let store = CollaborationStore(project: project)
+                let structure = try store.populateReadCopy(at: temporary, contents: store.snapshot())
+                let currentPrompt = prompt.replacingOccurrences(of: project.path, with: temporary.path)
+                    + "\nCurrent read-only project copy: " + temporary.path
+                    + "\nEarlier session paths and edit-output contracts are stale. Use this copy for reading only. Follow the current chat mode and reply in conversational prose."
+                    + "\n" + structure
+                return try await base.sendPrompt(currentPrompt, cliType: cliType, workingDirectory: temporary,
+                    sessionId: sessionId, allowsWorkspaceEdits: false, options: options, streamHandler: streamHandler)
+            }
             return try await base.sendPrompt(prompt, cliType: cliType, workingDirectory: workingDirectory,
                 sessionId: sessionId, allowsWorkspaceEdits: false, options: options, streamHandler: streamHandler)
         }

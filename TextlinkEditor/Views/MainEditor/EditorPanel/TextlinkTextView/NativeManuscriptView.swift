@@ -6,39 +6,26 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
     lazy var toolBridge = EditorToolBridge(editor: self)
     lazy var scrollCoordinator = EditorScrollCoordinator(editor: self)
     private var displayStyle: EditorDisplayStyle?
-    private var rendersMarkdown = false
-    private var applyingMarkdown = false
-    private var markdownRenderKey: String?
+    private let markdownPresentation = MarkdownPresentationController()
+    private var trackingMouseSelection = false
+
+    // AppKit runs its mouse tracking loop inside mouseDown. The presentation
+    // controller must not change marker geometry underneath its hit testing.
+    override func mouseDown(with event: NSEvent) {
+        trackingMouseSelection = true
+        defer {
+            trackingMouseSelection = false
+            refreshMarkdownRendering()
+        }
+        super.mouseDown(with: event)
+    }
 
     func setMarkdownRendering(_ enabled: Bool) {
-        guard rendersMarkdown != enabled else { return }
-        commitComposition()
-        rendersMarkdown = enabled
-        refreshMarkdownRendering(reset: true)
+        markdownPresentation.setMarkdownRendering(enabled, editor: self, style: displayStyle, generation: textEditGeneration)
     }
 
     func refreshMarkdownRendering(reset: Bool = false) {
-        guard (rendersMarkdown || reset), !applyingMarkdown, !hasMarkedText(),
-              let storage = textStorage, let style = displayStyle else { return }
-        let paragraph = (storage.string as NSString).paragraphRange(for: NSRange(location: min(selectedRange().location, storage.length), length: 0))
-        let key = "\(textEditGeneration)|\(paragraph.location)|\(style.key)|\(rendersMarkdown)"
-        guard reset || markdownRenderKey != key else { return }
-        markdownRenderKey = key
-        applyingMarkdown = true
-        defer { applyingMarkdown = false }
-        let anchor = scrollCoordinator.capture(for: .markdownRendering)
-        storage.beginEditing()
-        let whole = NSRange(location: 0, length: storage.length)
-        storage.addAttributes(style.changedAttributes(from: nil), range: whole)
-        storage.removeAttribute(.strikethroughStyle, range: whole)
-        storage.removeAttribute(.underlineStyle, range: whole)
-        if rendersMarkdown {
-            MarkdownSourceStyling.apply(to: storage, selection: selectedRange(),
-                font: NSFont(name: style.fontName, size: style.fontSize) ?? .systemFont(ofSize: style.fontSize))
-        }
-        storage.endEditing()
-        typingAttributes = style.changedAttributes(from: nil)
-        if let anchor { scrollCoordinator.restore(anchor) }
+        markdownPresentation.refresh(editor: self, style: displayStyle, generation: textEditGeneration, reset: reset, trackingSelection: trackingMouseSelection)
     }
     private(set) var inlinePanel: NSView?
     private var inlineAnchor = 0
@@ -175,7 +162,7 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
         breakUndoCoalescing()
     }
     func load(_ value: String, prepared: PreparedManuscript? = nil) {
-        markdownRenderKey = nil
+        markdownPresentation.invalidate()
         toolBridge.cancelPending()
         scrollCoordinator.cancel()
         displayStyle = nil
@@ -692,6 +679,13 @@ final class NativeManuscriptHost: NSScrollView {
     var textView: NativeManuscriptTextView { documentView as! NativeManuscriptTextView }
     override func tile() {
         super.tile()
+        // AppKit can reserve the ruler as a clip-view inset instead of shrinking
+        // contentSize. Wrapping must exclude that space, including on tab swaps.
+        let insets = contentView.contentInsets
+        let width = max(0, contentView.bounds.width - insets.left - insets.right)
+        if let documentView, documentView.frame.width != width {
+            documentView.setFrameSize(NSSize(width: width, height: documentView.frame.height))
+        }
         // Sidebar/assistant animation can resize the clip view without text edits.
         documentView?.needsLayout = true
     }
@@ -715,43 +709,3 @@ final class NativeManuscriptHost: NSScrollView {
 }
 
 /// Inline presentation changes attributes only; source offsets, newlines and Undo stay native.
-private enum MarkdownSourceStyling {
-    private static let code = try! NSRegularExpression(pattern: "`+[^`]*`+")
-    private static let patterns: [(NSRegularExpression, NSFontTraitMask, NSAttributedString.Key?)] = [
-        (#"(?<![\\*])\*\*\*(?=\S)(.+?)(?<=\S)\*\*\*"#, [.boldFontMask, .italicFontMask], nil),
-        (#"(?<![\\*])\*\*(?=\S)(.+?)(?<=\S)\*\*"#, .boldFontMask, nil),
-        (#"(?<![\\*])\*(?=\S)([^*\n]+?)(?<=\S)\*"#, .italicFontMask, nil),
-        (#"(?<![\\\w])__(?=\S)(.+?)(?<=\S)__"#, .boldFontMask, nil),
-        (#"(?<![\\\w])_(?=\S)([^_\n]+?)(?<=\S)_"#, .italicFontMask, nil),
-        (#"(?<!\\)~~(?=\S)(.+?)(?<=\S)~~"#, [], .strikethroughStyle),
-        (#"(?i)(?<!\\)<u>(.+?)</u>"#, [], .underlineStyle)
-    ].map { (try! NSRegularExpression(pattern: $0.0), $0.1, $0.2) }
-
-    static func apply(to storage: NSTextStorage, selection: NSRange, font: NSFont) {
-        let source = storage.string as NSString
-        let all = NSRange(location: 0, length: source.length)
-        let active = source.paragraphRange(for: NSRange(location: min(selection.location, source.length), length: 0))
-        let protected = code.matches(in: storage.string, range: all).map(\.range)
-        var consumed: [NSRange] = []
-        for (pattern, traits, decoration) in patterns {
-            for match in pattern.matches(in: storage.string, range: all) {
-                guard !protected.contains(where: { NSIntersectionRange($0, match.range).length > 0 }),
-                      !consumed.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) else { continue }
-                let content = match.range(at: 1)
-                consumed.append(match.range)
-                storage.addAttribute(.font, value: NSFontManager.shared.convert(font, toHaveTrait: traits), range: content)
-                if let decoration { storage.addAttribute(decoration, value: NSUnderlineStyle.single.rawValue, range: content) }
-                let markers = [NSRange(location: match.range.location, length: content.location - match.range.location),
-                    NSRange(location: NSMaxRange(content), length: NSMaxRange(match.range) - NSMaxRange(content))]
-                for marker in markers {
-                    if NSIntersectionRange(active, match.range).length > 0 {
-                        storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: marker)
-                    } else {
-                        storage.addAttributes([.foregroundColor: NSColor.clear,
-                            .font: NSFont.systemFont(ofSize: 0.01), .kern: 0], range: marker)
-                    }
-                }
-            }
-        }
-    }
-}

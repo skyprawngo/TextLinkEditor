@@ -12,6 +12,7 @@ import SwiftUI
 enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case editor
+    case typography
     case ai
     case shortcuts
     case developer
@@ -21,6 +22,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .general: return L10n.get("settings.general")
+        case .typography: return L10n.get("settings.typography")
         case .editor: return L10n.sidebar.editor
         case .ai: return L10n.get("settings.ai")
         case .shortcuts: return L10n.get("settings.shortcuts")
@@ -31,6 +33,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general: return "gearshape"
+        case .typography: return "textformat"
         case .editor: return "doc.text"
         case .ai: return "sparkles"
         case .shortcuts: return "keyboard"
@@ -56,6 +59,8 @@ struct SettingsView: View {
                 GeneralSettingsView()
             case .ai:
                 AISettingsView()
+            case .typography:
+                TypographySettingsView()
             case .editor:
                 EditorSettingsView()
             case .shortcuts:
@@ -76,9 +81,6 @@ struct GeneralSettingsView: View {
     @State private var selectedLanguage = LocalizationManager.shared.currentLanguage
     @State private var launchBehavior = UserSettings.shared.appLaunchBehavior
     @State private var appTheme = UserSettings.shared.appTheme
-    @State private var appFontName = UserSettings.shared.appFontName
-    @AppStorage(SidebarAppearance.textSizeKey, store: SidebarAppearance.store) private var sidebarTextSize = SidebarAppearance.defaultTextSize
-    @AppStorage(SidebarAppearance.iconSizeKey, store: SidebarAppearance.store) private var sidebarIconSize = SidebarAppearance.defaultIconSize
     @State private var permissionManager = PermissionManager.shared
     @State private var projectManager = ProjectManager.shared
 
@@ -92,13 +94,9 @@ struct GeneralSettingsView: View {
         appTheme != ThemeManager.shared.appliedTheme
     }
 
-    /// 표시용 앱 폰트 이름
-    private var displayAppFontName: String {
-        appFontName.isEmpty ? L10n.get("settings.font.system") : appFontName
-    }
-
     var body: some View {
         Form {
+            UpdateSettingsSection()
             // 언어 및 테마 설정
             Section {
                 Picker(L10n.get("settings.language"), selection: $selectedLanguage) {
@@ -152,45 +150,6 @@ struct GeneralSettingsView: View {
                     Text(L10n.get("settings.theme.changeMessage"))
                 }
 
-                // 앱 전역 폰트 설정
-                HStack {
-                    Text(L10n.get("settings.font.appFont"))
-
-                    Spacer()
-
-                    Button {
-                        showAppFontPanel()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(displayAppFontName)
-                                .lineLimit(1)
-                                .frame(maxWidth: 120)
-
-                            Image(systemName: "chevron.down")
-                                .font(.caption)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(AppColors.controlBackground)
-                        .cornerRadius(6)
-                    }
-                    .buttonStyle(.plain)
-
-                    // 시스템 기본으로 리셋 버튼 (커스텀 폰트 선택 시에만 표시)
-                    if !appFontName.isEmpty {
-                        Button {
-                            appFontName = ""
-                            UserSettings.shared.appFontName = ""
-                        } label: {
-                            Image(systemName: "arrow.counterclockwise")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help(L10n.get("settings.font.resetToSystem"))
-                    }
-                }
-
                 // 시작 동작 설정
                 Picker(L10n.get("settings.launch.title"), selection: $launchBehavior) {
                     ForEach(AppLaunchBehavior.allCases) { behavior in
@@ -200,13 +159,6 @@ struct GeneralSettingsView: View {
                 .onChange(of: launchBehavior) { _, newValue in
                     UserSettings.shared.appLaunchBehavior = newValue
                 }
-            }
-
-            Section(L10n.get("settings.sidebar.title")) {
-                sidebarSizeRow(L10n.get("settings.sidebar.textSize"), value: $sidebarTextSize,
-                               range: SidebarAppearance.textSizeRange)
-                sidebarSizeRow(L10n.get("settings.sidebar.iconSize"), value: $sidebarIconSize,
-                               range: SidebarAppearance.iconSizeRange)
             }
 
             // 이용약관
@@ -285,62 +237,6 @@ struct GeneralSettingsView: View {
         .formStyle(.grouped)
     }
 
-    private func sidebarSizeRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title)
-                Spacer()
-                Text("\(Int(value.wrappedValue.rounded())) pt")
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            Slider(value: value, in: range, step: 1)
-        }
-    }
-
-    /// 앱 전역 폰트 선택 패널 표시
-    private func showAppFontPanel() {
-        let fontPanel = NSFontPanel.shared
-        let fontManager = NSFontManager.shared
-
-        // 현재 폰트 설정
-        let currentFont: NSFont
-        if appFontName.isEmpty {
-            currentFont = NSFont.systemFont(ofSize: 13)
-        } else {
-            currentFont = NSFont(name: appFontName, size: 13) ?? NSFont.systemFont(ofSize: 13)
-        }
-
-        fontManager.setSelectedFont(currentFont, isMultiple: false)
-        fontManager.target = AppFontPanelDelegate.shared
-        fontManager.action = #selector(AppFontPanelDelegate.changeFont(_:))
-
-        // 폰트 변경 콜백 설정
-        AppFontPanelDelegate.shared.onFontChange = { [self] newFont in
-            appFontName = newFont.fontName
-            UserSettings.shared.appFontName = newFont.fontName
-        }
-
-        fontPanel.orderFront(nil)
-    }
-}
-
-// MARK: - App Font Panel Delegate
-
-/// 앱 전역 폰트 선택용 NSFontPanel 델리게이트
-private class AppFontPanelDelegate: NSObject {
-    static let shared = AppFontPanelDelegate()
-
-    var onFontChange: ((NSFont) -> Void)?
-
-    @objc func changeFont(_ sender: NSFontManager?) {
-        guard let fontManager = sender else { return }
-
-        let currentFont = fontManager.selectedFont ?? NSFont.systemFont(ofSize: 13)
-        let newFont = fontManager.convert(currentFont)
-
-        onFontChange?(newFont)
-    }
 }
 
 // MARK: - AI Settings
@@ -365,64 +261,12 @@ struct AISettingsView: View {
 // MARK: - Editor Settings
 
 struct EditorSettingsView: View {
-    @AppStorage(EditorToolbarAppearance.iconSizeKey, store: EditorToolbarAppearance.store) private var toolbarIconSize = EditorToolbarAppearance.defaultIconSize
-    @AppStorage(EditorToolbarAppearance.numberSizeKey, store: EditorToolbarAppearance.store) private var toolbarNumberSize = EditorToolbarAppearance.defaultNumberSize
-    @AppStorage(EditorToolbarAppearance.heightKey, store: EditorToolbarAppearance.store) private var toolbarHeight = EditorToolbarAppearance.defaultHeight
-    @State private var fontSize: CGFloat = UserSettings.shared.editorFontSize
-    @State private var fontName = UserSettings.shared.editorFontName
-    @State private var letterSpacing: Double = Double(UserSettings.shared.editorLetterSpacing)
-    @State private var lineSpacing: LineSpacingOption = LineSpacingOption(rawValue: UserSettings.shared.editorLineSpacing) ?? .normal
     @State private var autoSaveOption: AutoSaveOption = UserSettings.shared.autoSaveOption
     @State private var rememberCursorPosition: Bool = UserSettings.shared.rememberCursorPosition
 
     var body: some View {
         Form {
-            // 글꼴 설정
             Section {
-                Text(L10n.get("editor.appearance.defaultsHelp"))
-                    .font(.caption).foregroundStyle(.secondary)
-                HStack {
-                    Text(L10n.get("settings.editor.fontName"))
-                    Spacer()
-                    FontPickerControl(fontName: $fontName, fontSize: $fontSize)
-                }
-                .onChange(of: fontName) { _, name in UserSettings.shared.editorFontName = name }
-
-                HStack {
-                    Text(L10n.get("editor.letterSpacing"))
-                    TextField("", value: $letterSpacing, format: .number.precision(.fractionLength(0...1)))
-                        .frame(width: 60)
-                        .accessibilityLabel(L10n.get("editor.letterSpacing"))
-                    Text("pt").foregroundStyle(.secondary)
-                }
-                .onChange(of: letterSpacing) { _, value in
-                    guard value.isFinite else { return }
-                    let clamped = min(20, max(-5, value))
-                    letterSpacing = clamped
-                    UserSettings.shared.editorLetterSpacing = CGFloat(clamped)
-                }
-
-                HStack {
-                    Text(L10n.editor.fontSize)
-                    Slider(value: $fontSize, in: 12...24, step: 1)
-                        .frame(width: 150)
-                    Text("\(Int(fontSize))pt")
-                        .foregroundStyle(AppColors.textSecondary)
-                        .frame(width: 40, alignment: .trailing)
-                }
-                .onChange(of: fontSize) { _, newValue in
-                    UserSettings.shared.editorFontSize = CGFloat(newValue)
-                }
-
-                Picker(L10n.editor.lineSpacing, selection: $lineSpacing) {
-                    ForEach(LineSpacingOption.allCases) { option in
-                        Text(option.displayName).tag(option)
-                    }
-                }
-                .onChange(of: lineSpacing) { _, newValue in
-                    UserSettings.shared.editorLineSpacing = newValue.rawValue
-                }
-
                 Picker(L10n.get("settings.autoSave"), selection: $autoSaveOption) {
                     ForEach(AutoSaveOption.allCases) { option in
                         Text(option.displayName).tag(option)
@@ -437,30 +281,10 @@ struct EditorSettingsView: View {
                         UserSettings.shared.rememberCursorPosition = newValue
                     }
             }
-            Section(L10n.get("settings.editor.toolbar")) {
-                toolbarSizeRow("settings.editor.toolbarIconSize", value: $toolbarIconSize, range: EditorToolbarAppearance.sizeRange)
-                toolbarSizeRow("settings.editor.toolbarNumberSize", value: $toolbarNumberSize, range: EditorToolbarAppearance.sizeRange)
-                toolbarSizeRow("settings.editor.toolbarHeight", value: $toolbarHeight, range: EditorToolbarAppearance.heightRange)
-                Button(L10n.get("settings.editor.toolbarReset")) {
-                    toolbarIconSize = EditorToolbarAppearance.defaultIconSize
-                    toolbarNumberSize = EditorToolbarAppearance.defaultNumberSize
-                    toolbarHeight = EditorToolbarAppearance.defaultHeight
-                }
-            }
         }
         .formStyle(.grouped)
     }
-    private func toolbarSizeRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
-        HStack {
-            Text(L10n.get(title))
-            Slider(value: value, in: range, step: 1).frame(width: 150)
-                .accessibilityLabel(L10n.get(title))
-            Text("\(value.wrappedValue.formatted(.number.precision(.fractionLength(0)))) pt")
-                .monospacedDigit()
-                .foregroundStyle(AppColors.textSecondary)
-                .frame(width: 50, alignment: .trailing)
-        }
-    }
+
 }
 
 // MARK: - Shortcuts Settings

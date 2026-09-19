@@ -34,6 +34,8 @@ struct WritingWorkspaceView: View {
                 Spacer()
                 Button(L10n.get("writing.ui.6")) { save() }.disabled(!loaded || busy || document == savedDocument)
                 Button(L10n.get("writing.ui.7")) { if document != savedDocument { showDiscard = true } else { dismiss() } }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(busy)
             }.padding()
             Divider()
             if loaded {
@@ -43,7 +45,7 @@ struct WritingWorkspaceView: View {
             } else { ContentUnavailableView(L10n.get("writing.ui.8"), systemImage: "exclamationmark.triangle") }
         }
         .frame(minWidth: 780, minHeight: 560)
-        .interactiveDismissDisabled(document != savedDocument)
+        .interactiveDismissDisabled(busy || document != savedDocument)
         .task { reload() }
         .alert(L10n.get("writing.ui.9"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button(L10n.get("writing.ui.10")) { error = nil }

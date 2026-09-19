@@ -15,8 +15,10 @@ enum AIMessageRole: String, Codable {
 }
 
 enum AIConversationCategory: String, Codable, CaseIterable {
-    case chat, inlineEdit
-    var title: String { L10n.get(self == .chat ? "ai.inline.chatHistory" : "ai.inline.history") }
+    case chat, inlineEdit, commitMessage
+    var title: String {
+        L10n.get(self == .chat ? "ai.inline.chatHistory" : self == .inlineEdit ? "ai.inline.history" : "git.aiModel")
+    }
 }
 
 /// 채팅 메시지
@@ -33,6 +35,7 @@ struct AIMessage: Identifiable, Codable, Equatable {
     var provider: String?
     var model: String?
     var reasoningEffort: String?
+    var chatMode: String?
     var category: AIConversationCategory { kind == "inlineEdit" ? .inlineEdit : .chat }
 
     init(
@@ -45,7 +48,7 @@ struct AIMessage: Identifiable, Codable, Equatable {
         outcome: String? = nil,
         kind: String? = nil,
         usage: AIContextUsage? = nil,
-        provider: String? = nil, model: String? = nil, reasoningEffort: String? = nil
+        provider: String? = nil, model: String? = nil, reasoningEffort: String? = nil, chatMode: String? = nil
     ) {
         self.id = id
         self.role = role
@@ -59,10 +62,11 @@ struct AIMessage: Identifiable, Codable, Equatable {
         self.provider = provider
         self.model = model
         self.reasoningEffort = reasoningEffort
+        self.chatMode = chatMode
     }
 
     static func == (lhs: AIMessage, rhs: AIMessage) -> Bool {
-        lhs.id == rhs.id && lhs.content == rhs.content && lhs.isStreaming == rhs.isStreaming && lhs.conversationId == rhs.conversationId && lhs.outcome == rhs.outcome && lhs.kind == rhs.kind && lhs.usage == rhs.usage && lhs.provider == rhs.provider && lhs.model == rhs.model && lhs.reasoningEffort == rhs.reasoningEffort
+        lhs.id == rhs.id && lhs.content == rhs.content && lhs.isStreaming == rhs.isStreaming && lhs.conversationId == rhs.conversationId && lhs.outcome == rhs.outcome && lhs.kind == rhs.kind && lhs.usage == rhs.usage && lhs.provider == rhs.provider && lhs.model == rhs.model && lhs.reasoningEffort == rhs.reasoningEffort && lhs.chatMode == rhs.chatMode
     }
 }
 

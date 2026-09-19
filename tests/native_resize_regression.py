@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Exercise live AppKit width changes at multiple positions in a 100,000-line fixture."""
 from pathlib import Path
+from markdown_test_support import markdown_flags
 import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
 engine = root / 'TextlinkEditor/Services/Editor/TextEngine'
 views = root / 'TextlinkEditor/Views/MainEditor/EditorPanel/TextlinkTextView'
+markdown_sources = sorted((root / 'TextlinkEditor/Services/Editor/Markdown').glob('*.swift'))
 sources = [engine / name for name in ['TextDocument.swift', 'TextSelection.swift', 'ViewportManager.swift', 'EditorState.swift', 'EditorCommand.swift']]
 sources += sorted((engine / 'EditorState').glob('*.swift'))
 sources += [root / 'TextlinkEditor/Services/Core/EditorToolRegistry.swift']
+sources += markdown_sources
 sources += sorted((root / 'TextlinkEditor/Services/Editor/Scroll').glob('*.swift'))
 sources += [root / 'TextlinkEditor/Services/FileSystem/Workspace/WorkspaceFileEvents.swift']
 sources += [views / 'PreparedManuscript.swift', views / 'EditorToolBridge.swift', views / 'NativeManuscriptView.swift']
@@ -47,6 +50,10 @@ for fraction in [0.0, 0.5, 0.9] {
                 precondition(abs(rows[0].row - firstRow) <= 1, "width changes lost the visible paragraph anchor")
             } else { firstRow = rows[0].row }
             precondition(view.selectedRange() == selection, "resize changed the selection")
+            let clip = host.contentView
+            let availableWidth = clip.bounds.width - clip.contentInsets.left - clip.contentInsets.right
+            precondition(abs(view.frame.width - availableWidth) < 1,
+                         "resizing must exclude ruler and scroller insets from wrapping width")
             precondition(abs(view.textContainer!.size.width - view.frame.width + 2 * view.textContainerInset.width) < 1,
                          "text container width was deferred instead of tracking the view")
         }
@@ -73,5 +80,5 @@ with tempfile.TemporaryDirectory(prefix='textlink-resize-test-') as directory:
     main = directory / 'main.swift'
     main.write_text(prefix + harness)
     executable = directory / 'test'
-    subprocess.run(['swiftc', '-O', *map(str, sources), str(main), '-o', str(executable)], check=True)
+    subprocess.run(['swiftc', *markdown_flags(), '-O', *map(str, sources), str(main), '-o', str(executable)], check=True)
     subprocess.run([str(executable)], check=True)

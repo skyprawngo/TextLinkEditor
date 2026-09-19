@@ -7,6 +7,8 @@ struct ProjectGitSidebar: View {
     @AppStorage("git.sidebar.graphExpanded") private var graphExpanded = true
     @State private var confirmInitialize = false
     @State private var confirmCommit = false
+    @State private var pushAfterCommit = false
+    @State private var confirmPush = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,8 +22,9 @@ struct ProjectGitSidebar: View {
                     } else {
                         Label(model.snapshot.branch, systemImage: "arrow.triangle.branch").font(.caption).lineLimit(1)
                         TextField(L10n.get("git.commitMessage"), text: $model.commitMessage).textFieldStyle(.roundedBorder)
-                        Button { confirmCommit = true } label: { Label(L10n.get("git.commit"), systemImage: "checkmark") }
-                            .disabled(model.busy || !model.snapshot.changes.contains(where: \.staged) || model.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .disabled(model.busy)
+                        commitButton
+                        if model.busy { ProgressView().controlSize(.small) }
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 2) {
                                 group(.staged)
@@ -58,18 +61,38 @@ struct ProjectGitSidebar: View {
         .confirmationDialog(L10n.get("git.initializeConfirm"), isPresented: $confirmInitialize) {
             Button(L10n.get("git.initialize")) { model.perform { try $0.initialize() } }
         }
-        .confirmationDialog(L10n.get("git.commitConfirm"), isPresented: $confirmCommit) {
-            Button(L10n.get("git.commit")) {
-                let message = model.commitMessage
-                model.perform { try $0.commit(message) }
+        .confirmationDialog(L10n.get(pushAfterCommit ? "git.commitPushConfirm" : "git.commitConfirm"), isPresented: $confirmCommit) {
+            Button(L10n.get(pushAfterCommit ? "git.commitPush" : "git.commit")) {
+                model.commit(pushAfter: pushAfterCommit) { try await AIAssistantViewModel.shared.generateCommitMessage(patch: $0) }
             }
-        } message: { Text(model.commitMessage) }
-        .sheet(isPresented: Binding(get: { model.commitDetails != nil }, set: { if !$0 { model.commitDetails = nil } })) {
-            VStack(alignment: .leading) {
-                HStack { Text(L10n.get("git.commitDetails")).font(.headline); Spacer(); Button(L10n.get("common.close")) { model.commitDetails = nil } }
-                ScrollView([.vertical, .horizontal]) { Text(model.commitDetails ?? "").font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-            }.padding(20).frame(minWidth: 660, minHeight: 440)
+        } message: { Text(model.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? L10n.get("git.autoCommitHint") : model.commitMessage) }
+        .confirmationDialog(L10n.get("git.pushConfirm"), isPresented: $confirmPush) {
+            Button(L10n.get("git.push")) { model.push() }
         }
+        .sheet(isPresented: Binding(get: { model.commitDetails != nil }, set: { if !$0 { model.commitDetails = nil } })) {
+            CommitDiffView(patch: model.commitDetails ?? "") { model.commitDetails = nil }
+        }
+    }
+    private var commitButton: some View {
+        HStack(spacing: 0) {
+            Button { pushAfterCommit = false; confirmCommit = true } label: {
+                Label(L10n.get("git.commit"), systemImage: "checkmark")
+                    .frame(maxWidth: .infinity).frame(height: 28).contentShape(Rectangle())
+            }.buttonStyle(.plain).disabled(!model.canCommit)
+            Rectangle().fill(Color.primary.opacity(0.15)).frame(width: 1, height: 18)
+            Menu {
+                Button(L10n.get("git.commit")) { pushAfterCommit = false; confirmCommit = true }.disabled(!model.canCommit)
+                Button(L10n.get("git.commitPush")) { pushAfterCommit = true; confirmCommit = true }.disabled(!model.canCommit)
+                Divider()
+                Button(L10n.get("git.push")) { confirmPush = true }
+                    .disabled(model.busy || !model.snapshot.exists || model.snapshot.commits.isEmpty)
+            } label: {
+                Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).frame(width: 27, height: 28)
+            }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .accessibilityLabel(L10n.get("git.commitActions")).disabled(model.busy)
+        }
+        .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
+        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.primary.opacity(0.08)))
     }
     private func header(_ key: String, expanded: Binding<Bool>, count: Int) -> some View {
         VStack(spacing: 0) {

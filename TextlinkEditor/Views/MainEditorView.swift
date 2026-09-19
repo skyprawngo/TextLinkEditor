@@ -161,6 +161,7 @@ struct MainEditorView: View {
             HStack(spacing: 0) {
                 Rectangle().fill(AppColors.separator).frame(width: 1)
                     .padding(.horizontal, 3)
+                    .background(PanelResizeCursorRegion())
                     .contentShape(Rectangle())
                     .gesture(DragGesture(coordinateSpace: .global).onChanged { value in
                         if panelDragStartWidth == nil { panelDragStartWidth = resolvedAIPanelWidth }

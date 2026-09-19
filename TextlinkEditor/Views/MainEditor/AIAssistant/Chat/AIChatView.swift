@@ -410,6 +410,7 @@ struct AIChatView: View {
     var onPreviewDocument: () -> AIDocumentSnapshot? = { nil }
     @State private var modelSettings = AIAssistantViewModel.shared
     @State private var showingUsage = false
+    @State private var dismissedCommandDraft: String?
     @State private var showingModelControls = false
     @State private var composerHeight: CGFloat = 118
     @State private var inputHeight: CGFloat = 48
@@ -421,7 +422,6 @@ struct AIChatView: View {
     @State private var revisionError = false
     @State private var completedWorkspaceRequests = Set<UUID>()
     @State private var documentPreview: AIDocumentSnapshot?
-    @State private var followsResponse = true
     @State private var historyQuery = ""
     @State private var historyKind = 0
     @State private var pendingDeletion: UUID?
@@ -466,10 +466,21 @@ struct AIChatView: View {
         GeometryReader { geometry in
             ZStack {
                 ZStack(alignment: .bottom) {
-                    transcript
+                    AIChatTranscript(messages: detailMessages, conversationID: selectedCardId,
+                        processing: isProcessing, bottomInset: isInlineRecord ? 0 : composerHeight,
+                        completedRequests: completedWorkspaceRequests,
+                        project: ProjectManager.shared.currentProject?.path,
+                        onHistory: { showingHistory = true }, onRevision: { id in
+                            if let project = ProjectManager.shared.currentProject?.path,
+                               let record = AIWorkspaceEdits.load(id: id, project: project) {
+                                revisionPresentation = record
+                            } else { revisionError = true }
+                        }).equatable()
                     if !isInlineRecord {
                         composer
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
+                            .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: {
+                                if composerHeight != $0 { composerHeight = $0 }
+                            }
                     }
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height)
@@ -509,78 +520,25 @@ struct AIChatView: View {
             .buttonStyle(.borderless).help(L10n.get(title)).accessibilityLabel(L10n.get(title))
     }
 
-    private var transcript: some View {
-        VStack(spacing: 0) {
-            if selectedCardId == nil {
-                HStack {
-                    iconButton("ai.workspace.history", "chevron.left") { showingHistory = true }
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-            }
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 20) {
-                    if detailMessages.isEmpty {
-                        ContentUnavailableView {
-                            Label(L10n.get("ai.workspace.new"), systemImage: "bubble.left.and.bubble.right")
-                        } description: {
-                            Text(L10n.get("ai.workspace.startHint"))
-                        }
-                        .padding(.top, 32)
-                    } else {
-                        ForEach(detailMessages) { message in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(message.content).textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                if message.role == .assistant, !message.isStreaming, message.category != .inlineEdit,
-                                   let project = ProjectManager.shared.currentProject?.path,
-                                   completedWorkspaceRequests.contains(message.id) || AIWorkspaceEdits.exists(id: message.id, project: project) {
-                                    Button(L10n.get("revision.title")) {
-                                        if let record = AIWorkspaceEdits.load(id: message.id, project: project) {
-                                            revisionPresentation = record
-                                        } else { revisionError = true }
-                                    }
-                                    .buttonStyle(.borderless)
-                                }
-                            }
-                            .padding(message.role == .user ? 12 : 0)
-                            .background(message.role == .user ? Color.primary.opacity(0.05) : .clear,
-                                        in: RoundedRectangle(cornerRadius: 12))
-                            .contextMenu {
-                                Button(L10n.get("collaboration.fromChat")) {
-                                    AIAssistantViewModel.shared.collaboration.submitComment(message.content)
-                                }
-                                Button(L10n.get("common.copy")) {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(message.content, forType: .string)
-                                }
-                            }
-                        }
-                    }
-                    if isProcessing {
-                        HStack { ProgressView().controlSize(.small); Text(L10n.get("ai.chat.streaming")).font(.caption).foregroundStyle(.secondary) }
-                    }
-                    Color.clear.frame(height: isInlineRecord ? 0 : composerHeight).id("bottom")
-                }
-                    .padding(14)
-                }
-                .onScrollGeometryChange(for: Bool.self) { geometry in
-                    geometry.contentSize.height - geometry.visibleRect.maxY < 64
-                } action: { _, nearBottom in followsResponse = nearBottom }
-                .onChange(of: selectedCardId) { _, _ in followsResponse = true; proxy.scrollTo("bottom") }
-                .onChange(of: detailMessages.last?.content) { _, _ in
-                    if followsResponse { proxy.scrollTo("bottom") }
-                }
-                .onChange(of: detailMessages.count) { _, _ in proxy.scrollTo("bottom") }
-            }
-        }
-    }
-
     // One persistent composer for both a new conversation and its follow-ups.
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
+            let mode = AIChatMode.parse(inputText)?.mode ?? modelSettings.chatMode
+            if mode != .conversation {
+                Button {
+                    inputText = AIChatMode.parse(inputText)?.body ?? inputText
+                    modelSettings.chatMode = .conversation
+                    dismissedCommandDraft = inputText
+                } label: {
+                    Text(mode.command).font(.caption).foregroundStyle(.secondary)
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(.quaternary, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(isProcessing)
+                .help(L10n.get("ai.mode.removeTag"))
+                .accessibilityLabel(mode.command + " · " + L10n.get("ai.mode.removeTag"))
+            }
             if selectionState.isWaitingForSelection {
                 SelectionInputView(options: selectionState.options) { onSelectionResponse?($0) }
             } else {
@@ -589,6 +547,30 @@ struct AIChatView: View {
                     isDisabled: isProcessing, minHeight: 48, maxHeight: 160,
                     onSubmit: { onSend(selectedCardId) })
                     .frame(height: inputHeight)
+                    .popover(isPresented: Binding(
+                        get: { !isProcessing && AIChatMode.completionRange(inputText) != nil && dismissedCommandDraft != inputText },
+                        set: { if !$0 { dismissedCommandDraft = inputText } }
+                    ), arrowEdge: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(AIChatMode.allCases, id: \.rawValue) { mode in
+                                Button {
+                                    let body = AIChatMode.removingTagsForSelection(inputText)
+                                    modelSettings.chatMode = mode
+                                    dismissedCommandDraft = inputText
+                                    inputText = body
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(mode.command + " · " + mode.title).font(.callout)
+                                        Text(mode.detail).font(.caption).foregroundStyle(.secondary)
+                                    }.frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(8).contentShape(Rectangle())
+                                }.buttonStyle(.plain)
+                            }
+                        }.padding(6).frame(width: 290)
+                    }
+                    .onChange(of: inputText) { _, value in
+                        if AIChatMode.completionRange(value) == nil { dismissedCommandDraft = nil }
+                    }
                 HStack {
                     Button { showingContext = true } label: {
                         Label(contextCount == 0 ? L10n.get("ai.workspace.context") : "\(L10n.get("ai.workspace.context")) · \(contextCount)", systemImage: "paperclip")
@@ -832,16 +814,107 @@ struct AIChatView: View {
 
     private var previewPage: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(documentPreview?.name ?? L10n.get("ai.chat.previewDocument")).font(.headline)
-                Spacer()
-                Button(L10n.get("common.close")) { showingPreview = false }.keyboardShortcut(.cancelAction)
-            }
+            SheetHeader(title: documentPreview?.name ?? L10n.get("ai.chat.previewDocument")) { showingPreview = false }
             Text(L10n.get("ai.chat.previewDocumentDescription")).font(.caption).foregroundStyle(.secondary)
             ScrollView {
                 Text(documentPreview?.content ?? L10n.get("ai.error.contextUnavailable"))
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
             }
-        }.padding(20).frame(width: 600, height: 440)
+        }.padding(20).frame(minWidth: 600, idealWidth: 720, minHeight: 440, idealHeight: 560)
+    }
+}
+
+/// Draft keystrokes must not invalidate the lazy transcript's measured row heights.
+/// Real messages, streaming updates, revisions, and composer line growth still update it.
+private struct AIChatTranscript: View, Equatable {
+    let messages: [AIMessage]
+    let conversationID: UUID?
+    let processing: Bool
+    let bottomInset: CGFloat
+    let completedRequests: Set<UUID>
+    let project: URL?
+    let onHistory: () -> Void
+    let onRevision: (UUID) -> Void
+    @State private var followsResponse = true
+    @AppStorage("panel.fontName") private var panelFontName = ""
+    @AppStorage("panel.fontSize") private var panelFontSize = 13.0
+    @AppStorage("panel.lineSpacing") private var panelLineSpacing = 3.0
+    @AppStorage("panel.letterSpacing") private var panelLetterSpacing = 0.0
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.messages == rhs.messages && lhs.conversationID == rhs.conversationID
+            && lhs.processing == rhs.processing && lhs.bottomInset == rhs.bottomInset
+            && lhs.completedRequests == rhs.completedRequests && lhs.project == rhs.project
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button(action: onHistory) { Image(systemName: "chevron.left").frame(width: 26, height: 26) }
+                    .buttonStyle(.borderless).help(L10n.get("ai.workspace.history"))
+                    .accessibilityLabel(L10n.get("ai.workspace.history"))
+                Spacer()
+            }.padding(.horizontal, 12).padding(.top, 8)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    // Message heights vary widely. Exact layout avoids the feedback between
+                    // lazy height estimates, bottom anchoring and selectable-text overlays.
+                    VStack(alignment: .leading, spacing: 20) {
+                        if messages.isEmpty {
+                            ContentUnavailableView {
+                                Label(L10n.get("ai.workspace.new"), systemImage: "bubble.left.and.bubble.right")
+                            } description: { Text(L10n.get("ai.workspace.startHint")) }
+                                .padding(.top, 32)
+                        }
+                        ForEach(messages) { message in
+                            VStack(alignment: .leading, spacing: 6) {
+                                if message.role == .user, let rawMode = message.chatMode,
+                                   let mode = AIChatMode(rawValue: rawMode) {
+                                    Text(mode.command).font(.caption).foregroundStyle(.secondary)
+                                        .padding(.horizontal, 7).padding(.vertical, 3)
+                                        .background(.quaternary, in: Capsule())
+                                }
+                                Text(message.content).textSelection(.enabled)
+                                    .font(panelFontName.isEmpty || panelFontName == "SF Pro" || panelFontName == "System"
+                                          ? .system(size: panelFontSize) : .custom(panelFontName, size: panelFontSize))
+                                    .lineSpacing(panelLineSpacing)
+                                    .tracking(panelLetterSpacing)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                if message.role == .assistant, !message.isStreaming, message.category != .inlineEdit,
+                                   let project, completedRequests.contains(message.id) || AIWorkspaceEdits.exists(id: message.id, project: project) {
+                                    Button(L10n.get("revision.title")) { onRevision(message.id) }.buttonStyle(.borderless)
+                                }
+                            }
+                            .padding(message.role == .user ? 12 : 0)
+                            .background(message.role == .user ? Color.primary.opacity(0.05) : .clear,
+                                        in: RoundedRectangle(cornerRadius: 12))
+                            .contextMenu {
+                                Button(L10n.get("collaboration.fromChat")) {
+                                    AIAssistantViewModel.shared.collaboration.submitComment(message.content)
+                                }
+                                Button(L10n.get("common.copy")) {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(message.content, forType: .string)
+                                }
+                            }
+                        }
+                        if processing {
+                            HStack { ProgressView().controlSize(.small); Text(L10n.get("ai.chat.streaming")).font(.caption).foregroundStyle(.secondary) }
+                        }
+                        Color.clear.frame(height: bottomInset).id("bottom")
+                    }.padding(14)
+                }
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .defaultScrollAnchor(.top, for: .sizeChanges)
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentSize.height - geometry.visibleRect.maxY < 64
+                } action: { _, nearBottom in followsResponse = nearBottom }
+                .onChange(of: conversationID) { _, _ in followsResponse = true; proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: messages.last?.content) { _, _ in
+                    if followsResponse { proxy.scrollTo("bottom") }
+                }
+                .onChange(of: messages.count) { _, _ in proxy.scrollTo("bottom") }
+            }
+        }
     }
 }

@@ -95,14 +95,10 @@ struct ProjectExplorerView: View {
                 .frame(maxHeight: .infinity)
                 // Rows accept drops only when the pointer is over a folder. A drop over
                 // any other part of the explorer belongs to the project root.
-                .dropDestination(for: String.self) { droppedItems, _ in
-                    guard let rootItem = fileSystemManager.projectRoot,
-                          let urlString = droppedItems.first,
-                          let sourceURL = URL(string: urlString),
-                          let sourceItem = itemByURL[sourceURL] else {
-                        return false
-                    }
-                    return handleMoveItem(sourceItem, to: rootItem)
+                .onDrop(of: SidebarFileDrop.types, isTargeted: nil) { providers in
+                    guard let rootItem = fileSystemManager.projectRoot else { return false }
+                    return SidebarFileDrop.accept(providers, destination: rootItem, manager: fileSystemManager,
+                        find: { itemByURL[$0] }, move: { handleMoveItem($0, to: rootItem) }, completion: updateCache)
                 }
             }
             .contextMenu { rootContextMenu }

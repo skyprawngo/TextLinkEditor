@@ -64,6 +64,11 @@ final class AIModelPreferences {
                 modelSelections[key] = modelSelections[type.rawValue] ?? ""
                 effortSelections[key] = effortSelections[type.rawValue] ?? ""
             }
+            let commitKey = preferenceKey(type, .commitMessage)
+            if modelSelections[commitKey] == nil {
+                modelSelections[commitKey] = modelSelections[type.rawValue] ?? ""
+                effortSelections[commitKey] = effortSelections[type.rawValue] ?? ""
+            }
         }
         persistModelPreferences()
     }

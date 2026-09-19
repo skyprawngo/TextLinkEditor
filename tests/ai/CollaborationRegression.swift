@@ -28,6 +28,75 @@ func checkCollaboration(in folder: URL) async throws {
     let root = folder.appendingPathComponent("협업 project")
     try FileManager.default.createDirectory(at: root.appendingPathComponent("설정"), withIntermediateDirectories: true)
     let store = CollaborationStore(project: root)
+    let emptyRoot = folder.appendingPathComponent("empty creative project")
+    try FileManager.default.createDirectory(at: emptyRoot, withIntermediateDirectories: true)
+    let emptyStore = CollaborationStore(project: emptyRoot)
+    for path in ["설정".decomposedStringWithCanonicalMapping, "인물/조연", "자료/이미지", ".private/secret"] {
+        try FileManager.default.createDirectory(at: emptyRoot.appendingPathComponent(path), withIntermediateDirectories: true)
+    }
+    try Data([0, 1, 2]).write(to: emptyRoot.appendingPathComponent("자료/이미지/photo.png"))
+    try FileManager.default.createSymbolicLink(at: emptyRoot.appendingPathComponent("outside"), withDestinationURL: root)
+    check(try emptyStore.snapshotDirectories() == ["설정", "인물", "인물/조연", "자료", "자료/이미지"],
+          "directory inventory retains empty and nested Unicode folders but excludes hidden paths and symlinks")
+    try emptyStore.enable()
+    let createTask = try emptyStore.enqueue(origin: "conversation", instruction: "앞서 합의한 떠다니는 던전 설정을 첫 문서로 작성해 줘")
+    let createFixture = ProposalFixture(.init(summary: "세계관 초안 작성", edits: [
+        .init(path: "설정/세계관.md", content: "던전은 하늘에 떠 있다.", reason: "작가가 대화에서 확정하고 파일 작성을 요청함", evidence: [], dependsOn: [])
+    ], questions: [.init(id: "origin", question: "던전이 떠 있는 이유는 무엇인가요?",
+                        evidence: [.init(path: "설정/세계관.md", quote: "던전은 하늘에 떠 있다.")],
+                        options: ["미정", "마법"])], facts: []))
+    createFixture.beforeReturn = {
+        let copy = createFixture.directory!
+        check(FileManager.default.fileExists(atPath: copy.appendingPathComponent("인물/조연").path), "writing AI can browse existing empty subfolders")
+        check(FileManager.default.fileExists(atPath: copy.appendingPathComponent("설정").path), "writing copy preserves Korean folder names")
+        check(!FileManager.default.fileExists(atPath: copy.appendingPathComponent("outside").path)
+              && !FileManager.default.fileExists(atPath: copy.appendingPathComponent(".private").path)
+              && !FileManager.default.fileExists(atPath: copy.appendingPathComponent("자료/이미지/photo.png").path),
+              "copy excludes symlinks, metadata and binary contents")
+        check(createFixture.capturedPrompt.contains("인물") && createFixture.capturedPrompt.contains("Existing project directories"),
+              "prompt exposes current directory names")
+    }
+    let readFixture = ProposalFixture(.init(summary: "discussion", edits: [], questions: [], facts: []))
+    readFixture.beforeReturn = {
+        check(FileManager.default.fileExists(atPath: readFixture.directory!.appendingPathComponent("인물/조연").path),
+              "conversation and planning share the directory-aware copy")
+        check(readFixture.capturedPrompt.contains("Existing project directories"), "read-only modes receive current directory inventory")
+    }
+    var readOptions = AIRequestOptions()
+    readOptions.readsProjectFiles = true
+    _ = try await AIWorkspaceProposalExecutor(base: readFixture, requestID: UUID(), project: emptyRoot)
+        .sendPrompt("프로젝트 구조 확인", cliType: .claude, workingDirectory: emptyRoot, sessionId: nil,
+                    allowsWorkspaceEdits: false, options: readOptions, streamHandler: { _ in })
+    _ = try await CollaborationEngine(store: emptyStore, executor: createFixture).execute(taskID: createTask, provider: .claude, options: .init())
+    createFixture.beforeReturn = nil
+    check(try emptyStore.snapshot()["설정/세계관.md"] == "던전은 하늘에 떠 있다.", "first document can be created from author conversation without fabricated source evidence")
+    check(try emptyStore.load().tasks.first(where: { $0.id == createTask })?.phase == .waiting,
+          "question can cite an independently created document without blocking its creation")
+    let draftBefore = try emptyStore.snapshot()
+    let draftTask = try emptyStore.enqueue(origin: "conversation", instruction: "질문 근거 검증")
+    let draftFixture = ProposalFixture(.init(summary: "질문", edits: [
+        .init(path: "인물/주인공.md", content: "주인공은 탐험가다.", reason: "작가 요청", evidence: [], dependsOn: ["role"])
+    ], questions: [.init(id: "role", question: "직업을 확정할까요?",
+                        evidence: [.init(path: "인물/주인공.md", quote: "주인공은 탐험가다.")], options: ["예", "아니오"])], facts: []))
+    do {
+        _ = try await CollaborationEngine(store: emptyStore, executor: draftFixture).execute(taskID: draftTask, provider: .claude, options: .init())
+        preconditionFailure("question cited its own blocked edit")
+    } catch {}
+    check(try emptyStore.snapshot() == draftBefore, "blocked draft evidence cannot authorize publication")
+    draftFixture.proposal.edits[0].dependsOn = []
+    draftFixture.proposal.questions[0].evidence[0].quote = "없는 문장"
+    do {
+        _ = try await CollaborationEngine(store: emptyStore, executor: draftFixture).execute(taskID: draftTask, provider: .claude, options: .init())
+        preconditionFailure("fabricated question evidence accepted")
+    } catch {}
+    check(try emptyStore.snapshot() == draftBefore, "fabricated question evidence still rejects all edits")
+    let noEvidenceTask = try emptyStore.enqueue(origin: "conversation", instruction: "기존 설정 변경")
+    createFixture.proposal.edits[0].content = "던전은 바다에 있다."
+    do {
+        _ = try await CollaborationEngine(store: emptyStore, executor: createFixture).execute(taskID: noEvidenceTask, provider: .claude, options: .init())
+        preconditionFailure("existing document edit without evidence accepted")
+    } catch {}
+    check(try emptyStore.snapshot()["설정/세계관.md"] == "던전은 하늘에 떠 있다.", "existing documents still require actual evidence")
     let setting = try store.file("설정/인물.md")
     let manuscript = try store.file("원고.md")
     try "인물은 범인을 모른다.".write(to: setting, atomically: true, encoding: .utf8)

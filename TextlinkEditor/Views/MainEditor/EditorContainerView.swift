@@ -390,7 +390,9 @@ struct EditorContainerView: View {
                 isLoading = false
                 documentLoadTask = nil
             } catch {
-                guard !Task.isCancelled, documentLoadID == request else { return }
+                guard !Task.isCancelled, documentLoadID == request,
+                      currentDocumentID == documentID, tabManager.selectedTab?.id == documentID,
+                      currentFileURL == url else { return }
                 loadError = L10n.get("storage.readFailed") + " " + error.localizedDescription
                 isLoading = false
                 documentLoadTask = nil

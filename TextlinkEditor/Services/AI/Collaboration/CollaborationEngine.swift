@@ -25,12 +25,8 @@ struct CollaborationEngine {
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("TextlinkCollaboration-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temporary) }
-        for (path, text) in before {
-            let file = temporary.appendingPathComponent(path)
-            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data(text.utf8).write(to: file, options: .withoutOverwriting)
-        }
-        let prompt = try makePrompt(task: task, state: state, temporary: temporary, before: before)
+        let structure = try store.populateReadCopy(at: temporary, contents: before)
+        let prompt = try makePrompt(task: task, state: state, temporary: temporary, before: before) + "\n" + structure
         try store.updateTask(taskID) { $0.phase = .proposing }
         var readOptions = options
         readOptions.readsProjectFiles = true
@@ -117,6 +113,12 @@ struct CollaborationEngine {
                    "status":"confirmed or proposed","storyTime":"story chronology, if known","knownBy":"characters who know this",
                    "decision":"source of author decision","revealedFromSceneID":null}]}
         Empty arrays are allowed. Read relevant files before proposing edits. Cite actual excerpts.
+        For conversation tasks, summary is the full helpful reply, not merely an edit status.
+        Brainstorming is allowed even in an empty project. Do not treat new creative ideas as established facts.
+        New files may have empty evidence; explain their basis in the author's request and conversation in reason.
+        Edit evidence must quote existing source documents, never proposed content.
+        Question evidence may quote existing documents or the resulting content of independent edits
+        that can be applied now. Never cite an edit waiting on an unanswered question.
         The content value for deletion is JSON null, not the string "null".
         Make clear requested changes and necessary consistency updates throughout text documents.
         Preserve unrelated prose, style, plot, and content. Protected paths: \(protections)
@@ -145,25 +147,30 @@ struct CollaborationEngine {
         let ids = Set(proposal.questions.map(\.id)).union(task.questions.map(\.id))
         let sceneIDs = Set(try WritingWorkspaceStore(projectURL: store.project).load().scenes.map(\.id))
         guard Set(proposal.facts.map { $0.path + "\n" + $0.id }).count == proposal.facts.count else { throw CollaborationFailure.invalidResponse }
-        func evidence(_ entries: [CollaborationEvidence]) throws {
+        func evidence(_ entries: [CollaborationEvidence], resulting: [String: String] = [:]) throws {
             for entry in entries {
-                guard !entry.quote.isEmpty, before[entry.path]?.contains(entry.quote) == true else { throw CollaborationFailure.invalidResponse }
+                guard !entry.quote.isEmpty,
+                      before[entry.path]?.contains(entry.quote) == true || resulting[entry.path]?.contains(entry.quote) == true
+                else { throw CollaborationFailure.invalidResponse }
             }
         }
         for question in proposal.questions {
             guard !question.id.isEmpty, !question.question.isEmpty, question.answer == nil else { throw CollaborationFailure.invalidResponse }
-            try evidence(question.evidence)
         }
         for edit in proposal.edits {
             _ = try store.file(edit.path)
             guard !state.protectedPaths.contains(edit.path), !edit.reason.isEmpty,
-                  !edit.evidence.isEmpty, Set(edit.dependsOn).isSubset(of: ids) else { throw CollaborationFailure.invalidResponse }
+                  (!edit.evidence.isEmpty || (before[edit.path] == nil && edit.content != nil)),
+                  Set(edit.dependsOn).isSubset(of: ids) else { throw CollaborationFailure.invalidResponse }
             try evidence(edit.evidence)
         }
         let unanswered = Set(proposal.questions.map(\.id)).subtracting(task.questions.filter { $0.answer != nil }.map(\.id))
         var after = before
         for edit in proposal.edits where Set(edit.dependsOn).isDisjoint(with: unanswered) { after[edit.path] = edit.content }
         guard after.values.reduce(0, { $0 + $1.utf8.count }) <= CollaborationStore.byteLimit else { throw CollaborationFailure.tooLarge }
+        // Questions may discuss the new draft, but cannot bootstrap an edit's
+        // authority or cite content that is still blocked on an author decision.
+        for question in proposal.questions { try evidence(question.evidence, resulting: after) }
         for fact in proposal.facts {
             guard !fact.id.isEmpty, !fact.quote.isEmpty, after[fact.path]?.contains(fact.quote) == true,
                   fact.revealedFromSceneID.map({ sceneIDs.contains($0) }) ?? true,

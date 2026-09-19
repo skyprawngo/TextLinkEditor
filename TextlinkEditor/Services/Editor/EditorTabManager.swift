@@ -165,15 +165,19 @@ final class EditorTabManager: WorkspaceDocumentParticipant {
     /// 특정 폴더 하위의 모든 파일 탭 닫기
     /// - Parameter folderURL: 폴더 URL
     func closeTabsUnder(folderURL: URL) {
-        let folderPath = folderURL.path
-
-        // 뒤에서부터 순회하여 삭제 (인덱스 변화 방지)
-        for index in stride(from: tabs.count - 1, through: 0, by: -1) {
-            let tabPath = tabs[index].url.path
-            if tabPath.hasPrefix(folderPath + "/") || tabPath == folderPath {
-                closeTab(at: index, force: true)
-            }
-        }
+        let removed = tabs.filter { DocumentFileStore.contains($0.url, in: folderURL) }
+        guard !removed.isEmpty else { return }
+        let selectedID = selectedTab?.id
+        let previousIndex = selectedTabIndex
+        for tab in removed { removeCachedContent(for: tab.url) }
+        // Publish only the final selection. Per-tab notifications can select
+        // another document in the folder that has already been trashed.
+        let ids = Set(removed.map(\.id))
+        tabs.removeAll { ids.contains($0.id) }
+        selectedTabIndex = tabs.firstIndex(where: { $0.id == selectedID })
+            ?? max(0, min(previousIndex, tabs.count - 1))
+        notifyTabsChanged()
+        persistClosedTabs()
     }
 
     /// 특정 탭 선택

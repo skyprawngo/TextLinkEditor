@@ -36,6 +36,7 @@ FILES = [
     'TextlinkEditor/Services/FileSystem/FolderAppearanceStore.swift',
     'TextlinkEditor/Services/FileSystem/FileSystemManager.swift',
     'TextlinkEditor/Services/FileSystem/FileSystemDialogs.swift',
+    'TextlinkEditor/Services/FileSystem/SidebarFileDrop.swift',
 ]
 FILES += ['TextlinkEditor/Services/Editor/EditorTabManager.swift', 'TextlinkEditor/Services/Versions/VersionHistoryStore.swift', 'TextlinkEditor/Services/Writing/WritingWorkspaceStore.swift']
 FILES += [str(p.relative_to(ROOT)) for p in (ROOT / 'TextlinkEditor/Services/Editor/Session').glob('*.swift')]
@@ -83,7 +84,7 @@ expect(copy.iconName == "star", "copy carries appearance")
 try manager.setFolderIcon(nil, for: copy)
 expect(copy.iconName == "folder", "default clears custom icon")
 expect(moved.iconName == "star", "reset does not alter source folder")
-let section = manager.createFolder(named: "세계관", in: manager.projectRoot!)!
+let section = manager.createFolder(named: "설정", in: manager.projectRoot!)!
 try manager.setFolderIcon(.heart, for: section)
 try manager.setFolderIcon(nil, for: section)
 expect(section.iconName == "globe.asia.australia", "reset restores built-in section icon")
@@ -128,6 +129,69 @@ let deadline = Date().addingTimeInterval(5)
 while editor.getCachedContent(for: renamedDocument) != "external-style write", Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
 expect(editor.getCachedContent(for: renamedDocument) == "external-style write", "shared repository event updates renamed document")
 _ = editor.closeAllTabs(force: true)
+let deletedFolder = project.appendingPathComponent("삭제폴더")
+try fm.createDirectory(at: deletedFolder, withIntermediateDirectories: true)
+for name in ["a.md", "b.md", "c.md"] {
+    let url = deletedFolder.appendingPathComponent(name)
+    try "text".write(to: url, atomically: true, encoding: .utf8)
+    editor.openFile(FileSystemItem(url: url, isDirectory: false))
+}
+editor.openFile(FileSystemItem(url: renamedDocument, isDirectory: false))
+let survivingID = editor.selectedTab!.id
+var deletionNotifications = 0
+var selectedDeletedDocument = false
+let deletionObserver = NotificationCenter.default.addObserver(forName: .editorTabsDidChange, object: nil, queue: nil) { _ in
+    deletionNotifications += 1
+    if let url = editor.selectedTab?.url, DocumentFileStore.contains(url, in: deletedFolder) { selectedDeletedDocument = true }
+}
+// Use a recoverable move to model a successful folder trash operation.
+try fm.moveItem(at: deletedFolder, to: base.appendingPathComponent("DeletedFolder"))
+editor.closeTabsUnder(folderURL: URL(fileURLWithPath: deletedFolder.path.decomposedStringWithCanonicalMapping))
+expect(editor.tabs.count == 1 && editor.selectedTab?.id == survivingID, "folder deletion closes all descendants with normalized paths and preserves unrelated selection")
+expect(deletionNotifications == 1 && !selectedDeletedDocument, "folder deletion publishes only the final surviving selection")
+editor.closeTabsUnder(folderURL: deletedFolder)
+expect(deletionNotifications == 1, "duplicate deletion callback is a no-op")
+NotificationCenter.default.removeObserver(deletionObserver)
+_ = editor.closeAllTabs(force: true)
+let watchedFolder = manager.createFolder(named: "WatchedDeletion", in: manager.projectRoot!)!
+let watchedChild = manager.createFolder(named: "Nested", in: watchedFolder)!
+manager.loadChildren(of: watchedFolder)
+manager.loadChildren(of: watchedChild)
+manager.operationError = nil
+expect(manager.delete(watchedFolder), "watched folder deletion succeeds")
+let deletionDeadline = Date().addingTimeInterval(0.5)
+while Date() < deletionDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+expect(manager.operationError == nil, "deleted folder watchers do not report a read failure")
+let dropRoot = manager.projectRoot!
+let finderSource = base.appendingPathComponent("Finder 한글 file.md")
+try "external contents".write(to: finderSource, atomically: true, encoding: .utf8)
+func provider(_ url: URL, type: String = "public.file-url") -> NSItemProvider {
+    let result = NSItemProvider()
+    result.registerDataRepresentation(forTypeIdentifier: type, visibility: .all) { completion in
+        completion(Data(url.absoluteString.utf8), nil)
+        return nil
+    }
+    return result
+}
+func drop(_ providers: [NSItemProvider], into target: FileSystemItem) {
+    var finished = false
+    expect(SidebarFileDrop.accept(providers, destination: target, manager: manager,
+        find: { manager.findItem(by: $0) }, move: { manager.move($0, to: target) }, completion: { finished = true }), "drop accepts supported providers")
+    let deadline = Date().addingTimeInterval(5)
+    while !finished && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+    expect(finished, "drop completes asynchronously")
+}
+drop([provider(finderSource), provider(finderSource)], into: dropRoot)
+expect(fm.fileExists(atPath: finderSource.path), "Finder copy preserves original")
+expect(try! String(contentsOf: project.appendingPathComponent("Finder 한글 file.md"), encoding: .utf8) == "external contents", "Finder URL copies into project root")
+expect(fm.fileExists(atPath: project.appendingPathComponent("Finder 한글 file 1.md").path), "multiple providers resolve duplicate names without overwriting")
+let dropFolder = manager.createFolder(named: "DropFolder", in: dropRoot)!
+drop([provider(finderSource)], into: dropFolder)
+expect(fm.fileExists(atPath: dropFolder.url.appendingPathComponent(finderSource.lastPathComponent).path), "Finder drop targets nested folder")
+let internalFile = project.appendingPathComponent("Finder 한글 file 1.md")
+drop([provider(internalFile, type: "public.utf8-plain-text")], into: dropFolder)
+expect(!fm.fileExists(atPath: internalFile.path), "internal string drag retains move behavior")
+expect(SidebarFileDrop.fileURL("https://example.com" as NSString) == nil, "non-file URLs are rejected")
 manager.closeProject()
 print("ALL FOLDER OPTIONS REGRESSIONS PASSED")
 '''

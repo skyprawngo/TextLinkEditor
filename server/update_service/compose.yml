@@ -1,0 +1,49 @@
+services:
+  updates:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - update-data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  origin:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    depends_on:
+      updates:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8788:8080"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      default:
+      tunnel:
+        aliases: [textlinkeditor-origin]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+networks:
+  tunnel:
+    external: true
+    name: hometrader_default
+volumes:
+  update-data:

@@ -17,11 +17,12 @@ struct ProjectSearchView: View {
 
     var body: some View {
         VStack(alignment: .leading) {
+            SheetHeader(title: L10n.get("search.project")) { dismiss() }
+                .padding([.horizontal, .top], 20)
             HStack {
                 TextField(L10n.get("search.project"), text: $query).textFieldStyle(.roundedBorder)
                 if searching { ProgressView().controlSize(.small) }
                 Button(L10n.get("projectReplace.title")) { showingReplace = true }.disabled(projectURL == nil)
-                Button(L10n.get("common.close")) { dismiss() }
             }.padding()
             List(results) { hit in
                 Button {

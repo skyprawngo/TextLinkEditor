@@ -17,11 +17,8 @@ struct ProjectReplaceView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(L10n.get("projectReplace.title")).font(.title2)
-                Spacer()
+            SheetHeader(title: L10n.get("projectReplace.title"), isCloseDisabled: busy, close: { dismiss() }) {
                 if busy { ProgressView().controlSize(.small) }
-                Button(L10n.get("projectReplace.close")) { dismiss() }.disabled(busy)
             }
             Text(L10n.get("projectReplace.description")).font(.callout).foregroundStyle(.secondary)
             HStack {

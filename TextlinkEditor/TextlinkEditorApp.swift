@@ -67,6 +67,14 @@ struct TextlinkEditorApp: App {
         .defaultSize(width: 1400, height: 900)
         .commands {
             TextlinkEditorCommands(appCommands: appCommands)
+            #if !DEBUG
+            CommandGroup(after: .appInfo) {
+                Button(L10n.get("updates.check")) {
+                    Task { await AppUpdateManager.shared.check() }
+                }
+                .disabled(AppUpdateManager.shared.busy)
+            }
+            #endif
         }
 
         // 설정 윈도우 - 크기 조절 가능
@@ -170,6 +178,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// 앱 시작 완료 - 윈도우 표시 후 호출됨
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppUpdateManager.shared.start()
         if isAutoOpenMode {
             // 마지막 프로젝트 열기 모드: Welcome 윈도우 닫고 에디터 열기
             openLastProjectAndEditor()

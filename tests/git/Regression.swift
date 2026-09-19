@@ -65,6 +65,54 @@ enum L10n { static func get(_ key: String) -> String { key } }
         try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
         do { _ = try ProjectGitRepository(project: nested).snapshot(); preconditionFailure("parent Git accepted") } catch {}
         check(true, "parent repository is never managed implicitly")
+        do { _ = try repo.pushTarget(); preconditionFailure("missing upstream accepted") } catch ProjectGitError.noUpstream {}
+        let remote = root.appendingPathComponent("remote.git")
+        try git(["init", "--bare", remote.path])
+        try git(["remote", "add", "fixture", remote.path])
+        let branch = try repo.snapshot().branch
+        try git(["config", "branch.\(branch).remote", "fixture"])
+        try git(["config", "branch.\(branch).merge", "refs/heads/published"])
+        let target = try repo.pushTarget()
+        try repo.push(to: target, expectedHead: repo.head())
+        try git(["--git-dir=" + remote.path, "cat-file", "-e", try repo.head()])
+        check(true, "explicit upstream receives current commit in local bare fixture")
+        do { try repo.push(to: target, expectedHead: "outdated"); preconditionFailure("stale head pushed") } catch ProjectGitError.changed {}
+        try git(["config", "branch.\(branch).merge", "refs/heads/different"])
+        do { try repo.push(to: target, expectedHead: repo.head()); preconditionFailure("changed upstream pushed") } catch ProjectGitError.changed {}
+        check(true, "push rejects changed head or upstream")
         print("Git regression passed: \(assertions) assertions")
+        let parsed = CommitDiffDocument(patch: """
+        commit abc
+            Message
+        diff --git a/한글 file.md b/한글 file.md
+        --- a/한글 file.md
+        +++ b/한글 file.md
+        @@ -2,2 +2,3 @@ heading
+         same
+        -old
+        +new
+        +++literal
+        \\ No newline at end of file
+        @@ -10 +11 @@
+        -second
+        +replacement
+        diff --git a/image.png b/image.png
+        Binary files a/image.png and b/image.png differ
+        diff --git a/gone.md b/gone.md
+        deleted file mode 100644
+        --- a/gone.md
+        +++ /dev/null
+        @@ -1 +0,0 @@
+        -gone
+        """)
+        check(parsed.files.count == 3 && parsed.files[0].title == "한글 file.md", "diff groups Unicode and spaced file paths")
+        check(parsed.files[0].hunks.count == 2 && parsed.files[0].added == 3 && parsed.files[0].removed == 2, "hunks retain independent change totals")
+        let lines = parsed.files[0].hunks[0].lines
+        check(lines[0].oldNumber == 2 && lines[0].newNumber == 2 && lines[1].oldNumber == 3 && lines[1].newNumber == nil && lines[2].newNumber == 3,
+              "diff tracks old and new line numbers independently")
+        check(lines[3].kind == .added && lines[3].text == "+++literal" && lines[4].kind == .note, "content resembling headers and no-newline notes are preserved")
+        check(parsed.files[1].hunks.isEmpty && parsed.files[1].metadata.joined().contains("Binary files"), "binary metadata stays visible without fabricated lines")
+        check(parsed.files[2].title == "gone.md" && parsed.files[2].removed == 1, "deleted files retain old path")
+        check(CommitDiffDocument(patch: "metadata only").summary == "metadata only", "patchless commit summary remains visible")
     }
 }

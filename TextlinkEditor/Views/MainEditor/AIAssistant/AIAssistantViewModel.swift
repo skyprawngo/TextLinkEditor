@@ -15,6 +15,20 @@ final class AIAssistantViewModel {
     var installStatus: CLIInstallationStatus = .unknown
     var messages: [AIMessage] = []
     var inputText = ""
+    private var modeOverrides: [UUID: AIChatMode] = [:]
+    private var newChatMode: AIChatMode = .conversation
+    var chatMode: AIChatMode {
+        get {
+            guard let selectedCardId else { return newChatMode }
+            return modeOverrides[selectedCardId] ?? messages.last(where: {
+                $0.role == .user && ($0.conversationId ?? $0.id) == selectedCardId
+            }).flatMap { $0.chatMode.flatMap(AIChatMode.init(rawValue:)) } ?? .conversation
+        }
+        set {
+            if let selectedCardId { modeOverrides[selectedCardId] = newValue }
+            else { newChatMode = newValue }
+        }
+    }
     var isProcessing = false
     var taggedCardIds: Set<UUID> = []
     var selectionState: CLISelectionState = .empty
@@ -115,6 +129,8 @@ final class AIAssistantViewModel {
         cardSessionIds = [:]
         selectedCardId = nil
         inputText = ""
+        modeOverrides = [:]
+        newChatMode = .conversation
         includeCurrentDocument = false
         errorMessage = nil
         inlineErrorMessage = nil
@@ -149,9 +165,35 @@ final class AIAssistantViewModel {
     }
 
     func prepareDraftAction(_ instruction: String) {
-        inputText = instruction
+        inputText = "/작성 " + instruction
         includeCurrentDocument = true
         selectedCardId = nil
+    }
+
+    func generateCommitMessage(patch: String) async throws -> String {
+        guard !isProcessing, !collaboration.isWorking, case .connected(let provider) = connectionState,
+              provider != .chatgpt || chatGPTAccount.account != nil else {
+            throw AIRequestPreparationError.message(L10n.get("git.autoCommitUnavailable"))
+        }
+        guard selectedModel(for: provider, category: .commitMessage) != nil else {
+            throw AIRequestPreparationError.message(L10n.get("ai.model.retry"))
+        }
+        let owner = UUID()
+        requestId = owner
+        isProcessing = true
+        defer {
+            if requestId == owner { requestId = nil; isProcessing = false }
+        }
+        var options = requestOptions(for: provider, category: .commitMessage)
+        options.readsProjectFiles = false
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("TextlinkCommit-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let result = try await processManager.sendPrompt(AICommitMessage.prompt(patch: patch), cliType: provider,
+            workingDirectory: temporary, sessionId: nil, allowsWorkspaceEdits: false, options: options, streamHandler: { _ in })
+        try Task.checkCancellation()
+        guard requestId == owner else { throw CancellationError() }
+        return try AICommitMessage.decode(result.response)
     }
 
     func startConnection() {
@@ -231,7 +273,14 @@ final class AIAssistantViewModel {
             if inlineRevision != nil { inlineErrorMessage = message }
             else { errorMessage = message }
         }
-        let requestInput = inlineInput ?? inputText
+        var requestInput = inlineInput ?? inputText
+        let originalInput = requestInput
+        guard !isProcessing, !collaboration.isWorking else { return }
+        if inlineInput == nil, let command = AIChatMode.parse(requestInput) {
+            chatMode = command.mode
+            requestInput = command.body
+            if requestInput.isEmpty { inputText = ""; return }
+        }
         let attachDocument = inlineInput == nil && includeCurrentDocument
         guard !isProcessing, !collaboration.isWorking, !requestInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               case .connected(let type) = connectionState else { return }
@@ -259,22 +308,24 @@ final class AIAssistantViewModel {
         }
         var options = requestOptions(for: type, category: category)
         options.readsProjectFiles = inlineRevision == nil
-        let originalInput = requestInput
+        let mode = chatMode
         let existingSession = inlineRevision == nil ? resumableSession(for: conversationId, provider: type) : nil
         let prepared: PreparedAIRequest
         do {
             prepared = try AIRequestPreparer().prepare(requestInput: requestInput, type: type,
                 projectURL: projectURL, assistantId: assistantId, inlineRevision: inlineRevision,
                 attachDocument: attachDocument, messages: messages, taggedCardIds: taggedCardIds,
-                existingSession: existingSession, continueFromCardId: continuedConversation)
+                existingSession: existingSession, continueFromCardId: continuedConversation, chatMode: mode)
         } catch { reportPreparationError(error.localizedDescription); return }
-        messages.append(AIMessage(id: userId, role: .user, content: originalInput, conversationId: conversationId, kind: category.rawValue, provider: type.rawValue, model: options.model, reasoningEffort: options.effort))
+        messages.append(AIMessage(id: userId, role: .user, content: requestInput, conversationId: conversationId, kind: category.rawValue, provider: type.rawValue, model: options.model, reasoningEffort: options.effort, chatMode: inlineRevision == nil ? mode.rawValue : nil))
         messages.append(AIMessage(id: assistantId, role: .assistant, content: "", isStreaming: true, conversationId: conversationId, kind: category.rawValue, provider: type.rawValue, model: options.model, reasoningEffort: options.effort))
         guard persist() else { messages.removeLast(2); return }
         requestPersisted = true
         if inlineInput == nil {
             inputText = ""
             selectedCardId = conversationId
+            modeOverrides[conversationId] = mode
+            newChatMode = .conversation
         }
         isProcessing = true
         requestId = id
