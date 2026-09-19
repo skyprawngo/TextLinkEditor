@@ -26,6 +26,17 @@ let host = NativeManuscriptHost(textView: view)
 let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
 window.contentView = host
 window.makeFirstResponder(view)
+view.load("ruler width must preserve manuscript and selection")
+view.setSelectedRange(NSRange(location: 6, length: 5))
+let rulerText = view.string
+host.setRulerWidth(120)
+expect(host.verticalRulerView!.ruleThickness == 120, "ruler accepts configured width")
+host.setRulerWidth(0)
+expect(host.verticalRulerView!.ruleThickness == 40, "ruler clamps minimum width")
+host.setRulerWidth(.nan)
+expect(host.verticalRulerView!.ruleThickness == 58, "ruler rejects invalid saved width")
+expect(view.string == rulerText && view.selectedRange() == NSRange(location: 6, length: 5),
+       "ruler resizing preserves manuscript and selection")
 view.load("alpha beta\n한글 😀 é\nlast")
 view.setSelectedRange(NSRange(location: 0, length: 0))
 view.moveWordRight(nil)

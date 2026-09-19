@@ -23,6 +23,12 @@ final class CLIProcessManager: AIRequestExecuting {
         guard runner == nil else { throw CLIError.busy }
         // stdin avoids shell interpretation, argv length limits, and prompt exposure in process listings.
         let arguments: [String]
+        let contextRoot = LoreCodexEnvironment.directory
+        let compactLimit = cliType == .chatgpt ? await Task.detached {
+            CodexContextMeter.threshold(model: options.model, root: contextRoot)
+        }.value : nil
+        try Task.checkCancellation()
+        guard runner == nil else { throw CLIError.busy }
         switch cliType {
         case .claude:
             var args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
@@ -41,6 +47,7 @@ final class CLIProcessManager: AIRequestExecuting {
                         "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check"]
             args += options.arguments(for: cliType)
             if let workingDirectory { args += ["--cd", workingDirectory.path] }
+            if let compactLimit { args += ["-c", "model_auto_compact_token_limit=\(compactLimit)"] }
             if let sessionId { args += ["resume", sessionId] }
             args.append("-")
             arguments = args
@@ -50,7 +57,15 @@ final class CLIProcessManager: AIRequestExecuting {
         runner = current
         defer { if runner === current { runner = nil } }
         return try await withTaskCancellationHandler {
-            try await current.run()
+            var result = try await current.run()
+            if cliType == .chatgpt {
+                let completed = result
+                result.usage = await Task.detached {
+                    CodexContextMeter.read(sessionID: completed.sessionId, root: contextRoot,
+                                           limit: compactLimit, usage: completed.usage)
+                }.value
+            }
+            return result
         } onCancel: {
             current.cancel()
         }

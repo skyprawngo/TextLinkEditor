@@ -47,7 +47,7 @@ enum SystemTheme: ThemePalette, ThemePaletteNSColor {
     }
 
     static var textEditorBackground: Color {
-        Color(nsColor: .textBackgroundColor)
+        Color(nsColor: nsTextEditorBackground)
     }
 
     static var controlBackground: Color {
@@ -242,7 +242,7 @@ enum SystemTheme: ThemePalette, ThemePaletteNSColor {
     }
 
     static var nsTextEditorBackground: NSColor {
-        .textBackgroundColor
+        isDarkMode ? DarkTheme.nsTextEditorBackground : LightTheme.nsTextEditorBackground
     }
 
     static var nsCurrentLineHighlight: NSColor {

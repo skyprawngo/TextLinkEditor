@@ -72,6 +72,31 @@ func checkCollaboration(in folder: URL) async throws {
     check(try emptyStore.snapshot()["설정/세계관.md"] == "던전은 하늘에 떠 있다.", "first document can be created from author conversation without fabricated source evidence")
     check(try emptyStore.load().tasks.first(where: { $0.id == createTask })?.phase == .waiting,
           "question can cite an independently created document without blocking its creation")
+    let conversationID = UUID()
+    let conversationRequest = try AIRequestPreparer().prepare(
+        requestInput: "설정 내부에 길드 파일을 새로 생성해 줘", type: .claude,
+        projectURL: emptyRoot, assistantId: conversationID, inlineRevision: nil,
+        attachDocument: false, messages: [], taggedCardIds: [], existingSession: nil,
+        continueFromCardId: nil, chatMode: .conversation)
+    check(conversationRequest.allowsWorkspaceEdits, "conversation requests can use validated file edits")
+    let conversationFixture = ProposalFixture(.init(summary: "길드 파일 생성", edits: [
+        .init(path: "설정/길드.md", content: "길드는 경쟁으로 폐업했다.", reason: "사용자의 파일 생성 요청", evidence: [], dependsOn: [])
+    ], questions: [], facts: []))
+    _ = try await AIWorkspaceProposalExecutor(base: conversationFixture, requestID: conversationID, project: emptyRoot)
+        .sendPrompt(conversationRequest.prompt, cliType: .claude, workingDirectory: emptyRoot, sessionId: nil,
+                    allowsWorkspaceEdits: conversationRequest.allowsWorkspaceEdits, options: .init(), streamHandler: { _ in })
+    check(try emptyStore.snapshot()["설정/길드.md"] == "길드는 경쟁으로 폐업했다.", "conversation creates requested file through the app transaction")
+    let discussionID = UUID()
+    conversationFixture.proposal = .init(summary: "대화 응답", edits: [], questions: [], facts: [])
+    let discussionBefore = try emptyStore.snapshot()
+    let discussion = try await AIWorkspaceProposalExecutor(base: conversationFixture, requestID: discussionID, project: emptyRoot)
+        .sendPrompt("아이디어를 논의하자", cliType: .claude, workingDirectory: emptyRoot, sessionId: nil,
+                    allowsWorkspaceEdits: true, options: .init(), streamHandler: { _ in })
+    let discussionAfter = try emptyStore.snapshot()
+    check(discussion.response == "대화 응답" && discussionAfter == discussionBefore,
+          "discussion without edits preserves files and returns the answer")
+    check(AIWorkspaceEdits.load(id: discussionID, project: emptyRoot) == nil,
+          "discussion without edits does not create an empty comparison")
     let draftBefore = try emptyStore.snapshot()
     let draftTask = try emptyStore.enqueue(origin: "conversation", instruction: "질문 근거 검증")
     let draftFixture = ProposalFixture(.init(summary: "질문", edits: [

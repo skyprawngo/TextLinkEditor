@@ -41,7 +41,7 @@ enum DarkTheme: ThemePalette, ThemePaletteNSColor {
     }
 
     static var textEditorBackground: Color {
-        Color(nsColor: .textBackgroundColor)
+        Color(nsColor: nsTextEditorBackground)
     }
 
     static var controlBackground: Color {
@@ -236,7 +236,7 @@ enum DarkTheme: ThemePalette, ThemePaletteNSColor {
     }
 
     static var nsTextEditorBackground: NSColor {
-        .textBackgroundColor
+        NSColor(white: 0.09, alpha: 1)
     }
 
     static var nsCurrentLineHighlight: NSColor {

@@ -16,18 +16,24 @@ final class AIAssistantViewModel {
     var messages: [AIMessage] = []
     var inputText = ""
     private var modeOverrides: [UUID: AIChatMode] = [:]
-    private var newChatMode: AIChatMode = .conversation
+    private var newChatMode: AIChatMode?
     var chatMode: AIChatMode {
         get {
-            guard let selectedCardId else { return newChatMode }
-            return modeOverrides[selectedCardId] ?? messages.last(where: {
-                $0.role == .user && ($0.conversationId ?? $0.id) == selectedCardId
-            }).flatMap { $0.chatMode.flatMap(AIChatMode.init(rawValue:)) } ?? .conversation
+            guard let selectedCardId else { return newChatMode ?? .conversation }
+            return modeOverrides[selectedCardId] ?? .conversation
         }
         set {
             if let selectedCardId { modeOverrides[selectedCardId] = newValue }
             else { newChatMode = newValue }
         }
+    }
+    var hasChatModeTag: Bool {
+        if let selectedCardId { return modeOverrides[selectedCardId] != nil }
+        return newChatMode != nil
+    }
+    func clearChatModeTag() {
+        if let selectedCardId { modeOverrides.removeValue(forKey: selectedCardId) }
+        else { newChatMode = nil }
     }
     var isProcessing = false
     var taggedCardIds: Set<UUID> = []
@@ -130,7 +136,7 @@ final class AIAssistantViewModel {
         selectedCardId = nil
         inputText = ""
         modeOverrides = [:]
-        newChatMode = .conversation
+        newChatMode = nil
         includeCurrentDocument = false
         errorMessage = nil
         inlineErrorMessage = nil
@@ -323,9 +329,10 @@ final class AIAssistantViewModel {
         requestPersisted = true
         if inlineInput == nil {
             inputText = ""
+            if let selectedCardId { modeOverrides.removeValue(forKey: selectedCardId) }
             selectedCardId = conversationId
-            modeOverrides[conversationId] = mode
-            newChatMode = .conversation
+            modeOverrides.removeValue(forKey: conversationId)
+            newChatMode = nil
         }
         isProcessing = true
         requestId = id

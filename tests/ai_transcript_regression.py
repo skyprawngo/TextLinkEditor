@@ -23,6 +23,11 @@ struct AIMessage: Equatable, Identifiable {
 }
 enum AIChatMode: String { case conversation; var command: String { "/chat" } }
 enum L10n { static func get(_ key: String) -> String { key } }
+struct FileSystemItem { let url: URL; let isDirectory: Bool }
+final class EditorTabManager {
+    static let shared = EditorTabManager()
+    func openFile(_ item: FileSystemItem) {}
+}
 enum AIWorkspaceEdits { static func exists(id: UUID, project: URL) -> Bool { false } }
 @MainActor final class AIAssistantViewModel {
     static let shared = AIAssistantViewModel()
@@ -39,6 +44,8 @@ enum AIWorkspaceEdits { static func exists(id: UUID, project: URL) -> Bool { fal
     @Published var inset: CGFloat = 118
     @Published var conversationID = UUID()
     @Published var historyVisible = true
+    @Published var processing = false
+    @Published var resizing = false
     @Published var width: CGFloat = 320
     let messageID = UUID()
     let history: [AIMessage] = {
@@ -63,15 +70,48 @@ struct TestView: View {
     var body: some View {
         VStack {
             AIChatTranscript(messages: fixture.history + [.init(id: fixture.messageID, content: fixture.answer)], conversationID: fixture.conversationID,
-                processing: false, bottomInset: fixture.inset, completedRequests: [], project: nil,
+                processing: fixture.processing, completedRequests: [], project: nil,
                 onHistory: {}, onRevision: { _ in }).equatable()
+                .environment(\.aiPanelIsResizing, fixture.resizing)
                 .offset(x: fixture.historyVisible ? 320 : 0)
-            Text(fixture.draft).frame(width: 320, height: 48)
+            Text(fixture.draft).frame(width: 320, height: fixture.inset)
         }.frame(width: fixture.width, height: 600).clipped()
     }
 }
 @main struct Test {
     @MainActor static func main() {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let folder = root.appendingPathComponent("설정")
+        try! FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = folder.appendingPathComponent("세계관.md")
+        try! "fixture".write(to: file, atomically: true, encoding: .utf8)
+        let markdown = "앞 😀 [설정/세계관.md](설정/세계관.md) 뒤"
+        let rendered = TranscriptFileLinks.render(markdown, attributes: [:], project: root)
+        precondition(rendered.string == "앞 😀 설정/세계관.md 뒤")
+        let linkOffset = (rendered.string as NSString).range(of: "설정/").location
+        let link = rendered.attribute(.link, at: linkOffset, effectiveRange: nil) as! URL
+        precondition(link == file.resolvingSymlinksInPath())
+        let clickView = TranscriptTextView()
+        clickView.projectURL = root
+        var opened: URL?
+        clickView.onOpenFile = { opened = $0 }
+        precondition(clickView.textView(clickView, clickedOnLink: link, at: linkOffset))
+        precondition(opened == link)
+        for literal in ["[missing](없음.md)", "[outside](../outside.md)", "`[code](설정/세계관.md)`",
+                        "```\n[code](설정/세계관.md)\n```", "[web](https://example.com)"] {
+            precondition(TranscriptFileLinks.render(literal, attributes: [:], project: root).string == literal)
+        }
+        let encoded = "[문서](" + "설정/세계관.md".addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)! + ")"
+        precondition(TranscriptFileLinks.render(encoded, attributes: [:], project: root).string == "문서")
+        try! FileManager.default.createSymbolicLink(at: root.appendingPathComponent("external"), withDestinationURL: URL(fileURLWithPath: "/bin/sh"))
+        precondition(TranscriptFileLinks.existingFile(root.appendingPathComponent("external"), project: root) == nil)
+        try! FileManager.default.removeItem(at: file)
+        opened = nil
+        precondition(clickView.textView(clickView, clickedOnLink: link, at: linkOffset))
+        precondition(opened == nil, "deleted link must not open via an external application")
+        print("PASS project file links render, dispatch, and revalidate safely")
+        setbuf(stdout, nil)
         let suiteName = "transcript-test-" + UUID().uuidString
         let preferences = UserDefaults(suiteName: suiteName)!
         defer { preferences.removePersistentDomain(forName: suiteName) }
@@ -114,21 +154,48 @@ struct TestView: View {
             precondition(abs(scroll.contentView.bounds.origin.y - position) < 0.5, "typing moved the transcript")
         }
         print("PASS draft keystrokes preserve the scrolled transcript position")
+        let transcript = scroll.documentView as! TranscriptTextView
+        transcript.setSelectedRange(NSRange(location: 10, length: 8))
         let beforeResponse = RenderCounter.count
         fixture.answer += " streaming update"
         settle()
         precondition(RenderCounter.count > beforeResponse, "response update was suppressed")
-        print("PASS new response content still updates the transcript")
-        let beforeHeight = RenderCounter.count
+        precondition(transcript.selectedRange() == NSRange(location: 10, length: 8), "streaming changed text selection")
+        precondition(!transcript.isEditable && transcript.isSelectable, "transcript must remain selectable and read-only")
+        var openedRevision: UUID?
+        transcript.onRevision = { openedRevision = $0 }
+        let revisionID = UUID()
+        precondition(transcript.textView(transcript, clickedOnLink: URL(string: "textlink-revision://" + revisionID.uuidString)!, at: 0))
+        precondition(openedRevision == revisionID, "revision link lost its request identity")
+        print("PASS response updates preserve selection and revision actions")
+        fixture.processing = true
+        settle()
+        precondition(transcript.subviews.contains { $0 is NSProgressIndicator }, "processing indicator missing")
+        fixture.processing = false
+        settle()
+        let beforeHeightAnchor = (scroll.documentView as! TranscriptTextView).captureBottomAnchor()!
         fixture.inset = 160
         settle()
-        precondition(RenderCounter.count > beforeHeight, "composer growth was suppressed")
-        precondition(abs(scroll.contentView.bounds.origin.y - position) < 0.5, "composer growth moved the reading position")
+        // Composer layout is separate from the transcript render cache.
+        let afterHeightAnchor = (scroll.documentView as! TranscriptTextView).captureBottomAnchor()!
+        precondition(beforeHeightAnchor.offset == afterHeightAnchor.offset, "composer growth lost bottom text anchor")
         print("PASS real composer height changes still update reserved space")
         fixture.conversationID = UUID()
         for _ in 0..<4 { settle() }
         precondition(isAtBottom(), "switching conversation must return to the bottom")
         print("PASS switching conversation returns to the bottom")
+        let paddedText = scroll.documentView as! TranscriptTextView
+        for processing in [false, true, false] {
+            fixture.processing = processing
+            for _ in 0..<4 { settle() }
+            let manager = paddedText.layoutManager!
+            let container = paddedText.textContainer!
+            manager.ensureLayout(for: container)
+            let gap = paddedText.bounds.height - manager.usedRect(for: container).maxY - paddedText.textContainerOrigin.y
+            precondition(gap >= 45, "last reply/processing indicator needs scrollable bottom clearance")
+            precondition(abs(paddedText.textContainerOrigin.y - 14) < 1, "bottom padding must not move the transcript top")
+        }
+        print("PASS last reply and processing indicator retain 46pt bottom clearance with unchanged top inset")
         let beforeTypography = RenderCounter.count
         let previousHeight = scroll.documentView!.bounds.height
         preferences.set(20.0, forKey: "panel.fontSize")
@@ -139,10 +206,33 @@ struct TestView: View {
         precondition(RenderCounter.count > beforeTypography, "typography must refresh even with equatable transcript")
         precondition(scroll.documentView!.bounds.height > previousHeight, "larger typography must affect actual layout")
         print("PASS persisted panel typography updates transcript layout immediately")
-        for width: CGFloat in [280, 400, 600, 320] {
+        let textView = scroll.documentView as! TranscriptTextView
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 3000))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        settle()
+        let bottomAnchor = textView.captureBottomAnchor()!
+        fixture.resizing = true
+        settle()
+        var resizeStorageEdits = 0
+        let observer = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification,
+            object: textView.textStorage, queue: nil) { _ in resizeStorageEdits += 1 }
+        let resizeCPU = clock()
+        for width: CGFloat in [280, 400, 600, 320, 450, 290, 550, 320] {
             fixture.width = width
-            for _ in 0..<4 { settle() }
+            for _ in 0..<2 { settle() }
+            let line = textView.lineRect(at: bottomAnchor.offset)!
+            let distance = scroll.contentView.bounds.maxY - line.maxY - textView.textContainerOrigin.y
+            print("ANCHOR", width, distance, bottomAnchor.bottomDistance)
+            precondition(abs(distance - bottomAnchor.bottomDistance) < 1, "resize lost the sentence above the composer")
         }
+        fixture.resizing = false
+        settle()
+        NotificationCenter.default.removeObserver(observer)
+        precondition(resizeStorageEdits == 0, "resizing rebuilt the transcript storage")
+        print("PASS resize preserves the same text offset at viewport bottom; CPU seconds:", Double(clock() - resizeCPU) / Double(CLOCKS_PER_SEC))
+        let scrollFrame = host.convert(scroll.bounds, from: scroll)
+        precondition(scrollFrame.maxY <= host.bounds.height - fixture.inset, "transcript overlaps composer/footer")
+        print("PASS transcript viewport ends above composer including its footer margin")
         let idleCPU = clock()
         let idleRenders = RenderCounter.count
         RunLoop.main.run(until: Date().addingTimeInterval(2))
@@ -156,5 +246,5 @@ struct TestView: View {
 with tempfile.TemporaryDirectory(prefix='textlinkeditor-transcript-') as directory:
     path = Path(directory)
     (path / 'Test.swift').write_text(harness + '\n' + boundary)
-    subprocess.run(['xcrun', 'swiftc', '-parse-as-library', str(path / 'Test.swift'), '-o', str(path / 'test')], check=True)
+    subprocess.run(['xcrun', 'swiftc', '-parse-as-library', str(root / 'TextlinkEditor/Views/MainEditor/AIAssistant/Chat/AITranscriptScrollView.swift'), str(path / 'Test.swift'), '-o', str(path / 'test')], check=True)
     subprocess.run([str(path / 'test')], check=True, timeout=60)

@@ -28,7 +28,7 @@ struct AIRequestPreparer {
                 }
             }
         }
-        let allowsWorkspaceEdits = inlineRevision == nil && chatMode == .write
+        let allowsWorkspaceEdits = inlineRevision == nil && chatMode != .plan
         var workspaceBefore: [String: String]?
         if allowsWorkspaceEdits {
             workspaceBefore = try AIWorkspaceEdits.prepare(id: assistantId, project: projectURL)

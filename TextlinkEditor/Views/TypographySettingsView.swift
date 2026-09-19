@@ -30,11 +30,12 @@ struct TypographySettingsView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      Picker(L10n.get("settings.typography"), selection: $category) {
-        ForEach(["editor", "sidebar", "toolbar", "panel"], id: \.self) { item in
-          Text(L10n.get("settings.typography." + item)).tag(item)
-        }
-      }.pickerStyle(.segmented).padding(20)
+      LiquidGlassSegmentedControl(
+        title: L10n.get("settings.typography"), selection: $category,
+        options: ["editor", "sidebar", "toolbar", "panel"],
+        label: { L10n.get("settings.typography." + $0) }
+      )
+        .padding(20)
       Form {
         Section(L10n.get("settings.font.appFont")) {
           // 앱 전역 폰트 설정

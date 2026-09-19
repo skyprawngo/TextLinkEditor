@@ -36,6 +36,7 @@ struct ProjectExplorerView: View {
     /// 마지막으로 단일 선택된 항목 ID (Shift 범위 선택의 기준점)
     @State private var lastSelectedItemId: UUID?
     @State private var isRefreshing: Bool = false
+    @State private var sidebarHeight: CGFloat = 600
     @AppStorage(SidebarAppearance.textSizeKey, store: SidebarAppearance.store) private var storedTextSize = SidebarAppearance.defaultTextSize
     @AppStorage(SidebarAppearance.iconSizeKey, store: SidebarAppearance.store) private var storedIconSize = SidebarAppearance.defaultIconSize
 
@@ -105,10 +106,15 @@ struct ProjectExplorerView: View {
             .frame(maxHeight: .infinity)
 
             // 설정 버튼 (하단)
-            if let git, let collaboration { ProjectGitSidebar(model: git, collaboration: collaboration) }
+            if let git, let collaboration {
+                ProjectGitSidebar(model: git, collaboration: collaboration,
+                                  availableHeight: max(200, sidebarHeight - 180))
+                    .id(git.project)
+            }
             settingsFooter
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { sidebarHeight = $0 }
         .navigationTitle(projectManager.currentProject?.name ?? "")
         .onHover { hovering in
             isViewHovered = hovering

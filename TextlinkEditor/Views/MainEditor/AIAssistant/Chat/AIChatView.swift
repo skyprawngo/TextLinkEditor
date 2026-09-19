@@ -52,6 +52,8 @@ struct MultiLineInputView: NSViewRepresentable {
     let minHeight: CGFloat
     let maxHeight: CGFloat
     let onSubmit: () -> Void
+    var onModeSelected: ((AIChatMode) -> Void)?
+    var focusRequest: Int
 
     init(
         text: Binding<String>,
@@ -60,7 +62,9 @@ struct MultiLineInputView: NSViewRepresentable {
         isDisabled: Bool,
         minHeight: CGFloat = 32,
         maxHeight: CGFloat = 120,
-        onSubmit: @escaping () -> Void
+        onSubmit: @escaping () -> Void,
+        onModeSelected: ((AIChatMode) -> Void)? = nil,
+        focusRequest: Int = 0
     ) {
         self._text = text
         self._contentHeight = contentHeight
@@ -69,6 +73,8 @@ struct MultiLineInputView: NSViewRepresentable {
         self.minHeight = minHeight
         self.maxHeight = maxHeight
         self.onSubmit = onSubmit
+        self.onModeSelected = onModeSelected
+        self.focusRequest = focusRequest
     }
 
     func makeCoordinator() -> Coordinator {
@@ -117,7 +123,9 @@ struct MultiLineInputView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
 
+        let shouldFocus = context.coordinator.parent.focusRequest != focusRequest
         context.coordinator.parent = self
+        if shouldFocus && !isDisabled { textView.window?.makeFirstResponder(textView) }
         if textView.string != text && !textView.hasMarkedText() {
             textView.string = text
             textView.undoManager?.removeAllActions()
@@ -142,6 +150,14 @@ struct MultiLineInputView: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
+            if !textView.hasMarkedText(), let onModeSelected = parent.onModeSelected,
+               let draft = AIChatMode.extractDraftTag(textView.string, selection: textView.selectedRange()) {
+                onModeSelected(draft.mode)
+                textView.string = draft.body
+                textView.setSelectedRange(draft.selection)
+                // Native undo entries refer to the command text removed from this draft.
+                textView.undoManager?.removeAllActions()
+            }
             parent.text = textView.string
             updatePlaceholder()
             updateContentHeight()
@@ -410,9 +426,9 @@ struct AIChatView: View {
     var onPreviewDocument: () -> AIDocumentSnapshot? = { nil }
     @State private var modelSettings = AIAssistantViewModel.shared
     @State private var showingUsage = false
+    @State private var inputFocusRequest = 0
     @State private var dismissedCommandDraft: String?
     @State private var showingModelControls = false
-    @State private var composerHeight: CGFloat = 118
     @State private var inputHeight: CGFloat = 48
     @Binding var showingHistory: Bool
     @State private var showingContext = false
@@ -423,9 +439,9 @@ struct AIChatView: View {
     @State private var completedWorkspaceRequests = Set<UUID>()
     @State private var documentPreview: AIDocumentSnapshot?
     @State private var historyQuery = ""
+    @State private var isHistorySearchExpanded = false
     @State private var historyKind = 0
     @State private var pendingDeletion: UUID?
-    @State private var confirmingClear = false
     private var activeFile: EditorTab? { EditorTabManager.shared.selectedTab }
     /// 메시지를 대화 카드로 변환
     private var conversationCards: [ConversationCard] {
@@ -465,9 +481,11 @@ struct AIChatView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                ZStack(alignment: .bottom) {
+                // Cross the composer's 12pt top inset and tuck another 12pt of
+                // transcript behind its surface, without reaching its footer.
+                VStack(spacing: isInlineRecord ? 0 : -24) {
                     AIChatTranscript(messages: detailMessages, conversationID: selectedCardId,
-                        processing: isProcessing, bottomInset: isInlineRecord ? 0 : composerHeight,
+                        processing: isProcessing,
                         completedRequests: completedWorkspaceRequests,
                         project: ProjectManager.shared.currentProject?.path,
                         onHistory: { showingHistory = true }, onRevision: { id in
@@ -478,9 +496,7 @@ struct AIChatView: View {
                         }).equatable()
                     if !isInlineRecord {
                         composer
-                            .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: {
-                                if composerHeight != $0 { composerHeight = $0 }
-                            }
+                            .zIndex(1)
                     }
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height)
@@ -524,10 +540,10 @@ struct AIChatView: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             let mode = AIChatMode.parse(inputText)?.mode ?? modelSettings.chatMode
-            if mode != .conversation {
+            if modelSettings.hasChatModeTag || AIChatMode.parse(inputText) != nil {
                 Button {
                     inputText = AIChatMode.parse(inputText)?.body ?? inputText
-                    modelSettings.chatMode = .conversation
+                    modelSettings.clearChatModeTag()
                     dismissedCommandDraft = inputText
                 } label: {
                     Text(mode.command).font(.caption).foregroundStyle(.secondary)
@@ -545,28 +561,16 @@ struct AIChatView: View {
                 MultiLineInputView(text: $inputText, contentHeight: $inputHeight,
                     placeholder: L10n.get(selectedCardId == nil ? "ai.chat.inputPlaceholder" : "ai.chat.continueConversation"),
                     isDisabled: isProcessing, minHeight: 48, maxHeight: 160,
-                    onSubmit: { onSend(selectedCardId) })
+                    onSubmit: { onSend(selectedCardId) },
+                    onModeSelected: { mode in modelSettings.chatMode = mode },
+                    focusRequest: inputFocusRequest)
                     .frame(height: inputHeight)
-                    .popover(isPresented: Binding(
-                        get: { !isProcessing && AIChatMode.completionRange(inputText) != nil && dismissedCommandDraft != inputText },
-                        set: { if !$0 { dismissedCommandDraft = inputText } }
-                    ), arrowEdge: .top) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(AIChatMode.allCases, id: \.rawValue) { mode in
-                                Button {
-                                    let body = AIChatMode.removingTagsForSelection(inputText)
-                                    modelSettings.chatMode = mode
-                                    dismissedCommandDraft = inputText
-                                    inputText = body
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(mode.command + " · " + mode.title).font(.callout)
-                                        Text(mode.detail).font(.caption).foregroundStyle(.secondary)
-                                    }.frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(8).contentShape(Rectangle())
-                                }.buttonStyle(.plain)
-                            }
-                        }.padding(6).frame(width: 290)
+                    // An anchored in-window popover never becomes a key window or steals the caret.
+                    .overlay(alignment: .bottomLeading) {
+                        if !isProcessing && AIChatMode.completionRange(inputText) != nil && dismissedCommandDraft != inputText {
+                            commandPopover
+                                .padding(.bottom, inputHeight + 8)
+                        }
                     }
                     .onChange(of: inputText) { _, value in
                         if AIChatMode.completionRange(value) == nil { dismissedCommandDraft = nil }
@@ -595,9 +599,13 @@ struct AIChatView: View {
         }
         .padding(10)
         // Match the manuscript surface without mixing in the lighter assistant backdrop.
-        .background(AppColors.textEditorBackground, in: RoundedRectangle(cornerRadius: 16))
+        .background(AppColors.textEditorBackground, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
-        .padding(12)
+        .padding(.top, 12)
+        .padding(.leading, 4)
+        // Match the native sidebar surface's inset from the window edges,
+        // not the file list's 4pt padding inside that surface.
+        .padding([.trailing, .bottom], 8)
     }
 
     private var modelControls: some View {
@@ -612,7 +620,38 @@ struct AIChatView: View {
         .buttonStyle(.borderless)
         .disabled(isProcessing)
         .accessibilityLabel(L10n.get("ai.model.title") + " · " + L10n.get("ai.effort.title"))
-        .popover(isPresented: $showingModelControls, arrowEdge: .top) { modelPopover }
+        .popover(isPresented: $showingModelControls, arrowEdge: .top) {
+            FocusRinglessPopover { modelPopover }
+        }
+    }
+
+    private var commandPopover: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(AIChatMode.allCases, id: \.rawValue) { mode in
+                Button {
+                    let body = AIChatMode.removingTagsForSelection(inputText)
+                    modelSettings.chatMode = mode
+                    dismissedCommandDraft = inputText
+                    inputText = body
+                    inputFocusRequest += 1
+                } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(mode.command + " · " + mode.title).font(.callout)
+                        Text(mode.detail).font(.caption).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .focusEffectDisabled()
+            }
+        }
+        .padding(6)
+        .frame(maxWidth: 290)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.18), radius: 10, y: 3)
     }
 
     private var effortSteps: [String] {
@@ -658,6 +697,7 @@ struct AIChatView: View {
                 let index = min(effortSteps.count - 1, max(0, Int(value.rounded())))
                 modelSettings.selectEffort(effortSteps[index], for: cliType)
             }), in: 0...Double(max(1, effortSteps.count - 1)), step: 1)
+            .focusEffectDisabled()
             .disabled(effortSteps.count < 2)
             .accessibilityLabel(L10n.get("ai.effort.title"))
             .accessibilityValue(currentEffortLabel)
@@ -688,17 +728,42 @@ struct AIChatView: View {
         return value == key ? effort.capitalized : value
     }
 
+    private var latestContextUsage: AIContextUsage? {
+        detailMessages.last(where: { $0.role == .assistant && !$0.isStreaming })?.usage
+    }
+
+    private var contextProgressLabel: String {
+        latestContextUsage?.compactionProgress.map { "\(Int($0 * 100))%" }
+            ?? L10n.get("ai.usage.unavailable")
+    }
+
     private var contextUsageButton: some View {
         Button { showingUsage = true } label: {
-            Image(systemName: "circle.dashed").foregroundStyle(.secondary)
+            ZStack {
+                Circle().stroke(.secondary.opacity(0.25), lineWidth: 3)
+                if let progress = latestContextUsage?.compactionProgress {
+                    Circle().trim(from: 0, to: progress)
+                        .stroke(progress >= 0.9 ? Color.orange : Color.secondary,
+                                style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                } else {
+                    Image(systemName: "questionmark").font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+            }.frame(width: 16, height: 16).padding(3)
         }
         .buttonStyle(.borderless)
-        .help(L10n.get("ai.usage.title"))
+        .help(L10n.get("ai.usage.compaction") + " · " + contextProgressLabel)
         .accessibilityLabel(L10n.get("ai.usage.title"))
+        .accessibilityValue(contextProgressLabel)
         .popover(isPresented: $showingUsage, arrowEdge: .top) {
             VStack(alignment: .leading, spacing: 8) {
                 Text(L10n.get("ai.usage.title")).font(.headline)
-                if let usage = detailMessages.last(where: { $0.role == .assistant })?.usage {
+                if let usage = latestContextUsage {
+                    LabeledContent(L10n.get("ai.usage.current"), value: usage.currentContextTokens?.formatted() ?? L10n.get("ai.usage.unavailable"))
+                    LabeledContent(L10n.get("ai.usage.compaction"), value: usage.autoCompactTokenLimit?.formatted() ?? L10n.get("ai.usage.unavailable"))
+                    Text(L10n.get("ai.usage.compactionNote")).font(.caption).foregroundStyle(.secondary)
+                    Divider()
                     LabeledContent(L10n.get("ai.usage.input"), value: usage.inputTokens.formatted())
                     LabeledContent(L10n.get("ai.usage.cached"), value: usage.cachedTokens.formatted())
                     LabeledContent(L10n.get("ai.usage.output"), value: usage.outputTokens.formatted())
@@ -745,21 +810,41 @@ struct AIChatView: View {
 
     private var historyPage: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text(L10n.get("ai.workspace.history")).font(.headline)
+            LiquidGlassSegmentedControl(
+                title: L10n.get("ai.inline.history"), selection: $historyKind,
+                options: [0, 1, 2],
+                label: { L10n.get(["ai.inline.allHistory", "ai.inline.chatHistory", "ai.inline.history"][$0]) }
+            ).padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 8)
+            HStack(spacing: 8) {
+                if isHistorySearchExpanded {
+                    ToolbarSearchField(text: $historyQuery,
+                        prompt: L10n.get("ai.workspace.searchHistory"),
+                        onCancel: {
+                            historyQuery = ""
+                            isHistorySearchExpanded = false
+                        })
+                        .frame(maxWidth: 200)
+                        .frame(height: 30)
+                        .glassEffect(.regular, in: .capsule)
+                } else {
+                    Button { isHistorySearchExpanded = true } label: {
+                        Image(systemName: "magnifyingglass").frame(width: 16, height: 16)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 32, height: 32)
+                    .glassEffect(.regular.interactive(), in: .circle)
+                    .help(L10n.get("ai.workspace.searchHistory"))
+                    .accessibilityLabel(L10n.get("ai.workspace.searchHistory"))
+                }
                 Spacer()
                 iconButton("ai.workspace.new", "plus") {
                     selectedCardId = nil
                     showingHistory = false
                 }
-            }.padding(16)
-            TextField(L10n.get("ai.workspace.searchHistory"), text: $historyQuery)
-                .textFieldStyle(.roundedBorder).padding(.horizontal, 16).padding(.bottom, 12)
-            Picker(L10n.get("ai.inline.history"), selection: $historyKind) {
-                Text(L10n.get("ai.inline.allHistory")).tag(0)
-                Text(L10n.get("ai.inline.chatHistory")).tag(1)
-                Text(L10n.get("ai.inline.history")).tag(2)
-            }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.bottom, 8)
+            }
+            .frame(height: 32)
+            .padding(.horizontal, 16).padding(.bottom, 8)
+            .animation(.smooth(duration: 0.22), value: isHistorySearchExpanded)
             List {
                 ForEach(conversationCards.reversed().filter {
                     (historyQuery.isEmpty || $0.userMessage.content.localizedStandardContains(historyQuery) || $0.id.uuidString.localizedStandardContains(historyQuery) || ($0.userMessage.model?.localizedStandardContains(historyQuery) ?? false)) &&
@@ -794,11 +879,6 @@ struct AIChatView: View {
                     }.padding(.vertical, 5)
                 }
             }
-            HStack {
-                Button(L10n.get("ai.chat.clearHistory"), role: .destructive) { confirmingClear = true }
-                    .disabled(messages.isEmpty)
-                Spacer()
-            }.padding(16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .confirmationDialog(L10n.get("ai.workspace.deleteConfirm"), isPresented: Binding(get: { pendingDeletion != nil }, set: { if !$0 { pendingDeletion = nil } })) {
@@ -806,9 +886,6 @@ struct AIChatView: View {
                 if let id = pendingDeletion { onDeleteCard?(id) }
                 pendingDeletion = nil
             }
-        }
-        .confirmationDialog(L10n.get("ai.workspace.clearConfirm"), isPresented: $confirmingClear) {
-            Button(L10n.get("ai.chat.clearHistory"), role: .destructive, action: onClearHistory)
         }
     }
 
@@ -824,18 +901,15 @@ struct AIChatView: View {
     }
 }
 
-/// Draft keystrokes must not invalidate the lazy transcript's measured row heights.
-/// Real messages, streaming updates, revisions, and composer line growth still update it.
+/// Draft keystrokes do not rebuild the transcript. TextKit handles viewport reflow.
 private struct AIChatTranscript: View, Equatable {
     let messages: [AIMessage]
     let conversationID: UUID?
     let processing: Bool
-    let bottomInset: CGFloat
     let completedRequests: Set<UUID>
     let project: URL?
     let onHistory: () -> Void
     let onRevision: (UUID) -> Void
-    @State private var followsResponse = true
     @AppStorage("panel.fontName") private var panelFontName = ""
     @AppStorage("panel.fontSize") private var panelFontSize = 13.0
     @AppStorage("panel.lineSpacing") private var panelLineSpacing = 3.0
@@ -843,7 +917,7 @@ private struct AIChatTranscript: View, Equatable {
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.messages == rhs.messages && lhs.conversationID == rhs.conversationID
-            && lhs.processing == rhs.processing && lhs.bottomInset == rhs.bottomInset
+            && lhs.processing == rhs.processing
             && lhs.completedRequests == rhs.completedRequests && lhs.project == rhs.project
     }
 
@@ -855,66 +929,30 @@ private struct AIChatTranscript: View, Equatable {
                     .accessibilityLabel(L10n.get("ai.workspace.history"))
                 Spacer()
             }.padding(.horizontal, 12).padding(.top, 8)
-            ScrollViewReader { proxy in
-                ScrollView {
-                    // Message heights vary widely. Exact layout avoids the feedback between
-                    // lazy height estimates, bottom anchoring and selectable-text overlays.
-                    VStack(alignment: .leading, spacing: 20) {
-                        if messages.isEmpty {
-                            ContentUnavailableView {
-                                Label(L10n.get("ai.workspace.new"), systemImage: "bubble.left.and.bubble.right")
-                            } description: { Text(L10n.get("ai.workspace.startHint")) }
-                                .padding(.top, 32)
-                        }
-                        ForEach(messages) { message in
-                            VStack(alignment: .leading, spacing: 6) {
-                                if message.role == .user, let rawMode = message.chatMode,
-                                   let mode = AIChatMode(rawValue: rawMode) {
-                                    Text(mode.command).font(.caption).foregroundStyle(.secondary)
-                                        .padding(.horizontal, 7).padding(.vertical, 3)
-                                        .background(.quaternary, in: Capsule())
-                                }
-                                Text(message.content).textSelection(.enabled)
-                                    .font(panelFontName.isEmpty || panelFontName == "SF Pro" || panelFontName == "System"
-                                          ? .system(size: panelFontSize) : .custom(panelFontName, size: panelFontSize))
-                                    .lineSpacing(panelLineSpacing)
-                                    .tracking(panelLetterSpacing)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                if message.role == .assistant, !message.isStreaming, message.category != .inlineEdit,
-                                   let project, completedRequests.contains(message.id) || AIWorkspaceEdits.exists(id: message.id, project: project) {
-                                    Button(L10n.get("revision.title")) { onRevision(message.id) }.buttonStyle(.borderless)
-                                }
-                            }
-                            .padding(message.role == .user ? 12 : 0)
-                            .background(message.role == .user ? Color.primary.opacity(0.05) : .clear,
-                                        in: RoundedRectangle(cornerRadius: 12))
-                            .contextMenu {
-                                Button(L10n.get("collaboration.fromChat")) {
-                                    AIAssistantViewModel.shared.collaboration.submitComment(message.content)
-                                }
-                                Button(L10n.get("common.copy")) {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(message.content, forType: .string)
-                                }
-                            }
-                        }
-                        if processing {
-                            HStack { ProgressView().controlSize(.small); Text(L10n.get("ai.chat.streaming")).font(.caption).foregroundStyle(.secondary) }
-                        }
-                        Color.clear.frame(height: bottomInset).id("bottom")
-                    }.padding(14)
-                }
-                .defaultScrollAnchor(.bottom, for: .initialOffset)
-                .defaultScrollAnchor(.top, for: .sizeChanges)
-                .onScrollGeometryChange(for: Bool.self) { geometry in
-                    geometry.contentSize.height - geometry.visibleRect.maxY < 64
-                } action: { _, nearBottom in followsResponse = nearBottom }
-                .onChange(of: conversationID) { _, _ in followsResponse = true; proxy.scrollTo("bottom", anchor: .bottom) }
-                .onChange(of: messages.last?.content) { _, _ in
-                    if followsResponse { proxy.scrollTo("bottom") }
-                }
-                .onChange(of: messages.count) { _, _ in proxy.scrollTo("bottom") }
+            if messages.isEmpty {
+                ContentUnavailableView {
+                    Label(L10n.get("ai.workspace.new"), systemImage: "bubble.left.and.bubble.right")
+                } description: { Text(L10n.get("ai.workspace.startHint")) }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                AITranscriptScrollView(entries: messages.map { message in
+                    let revision = message.role == .assistant && !message.isStreaming && message.category != .inlineEdit
+                        && project.map { completedRequests.contains(message.id) || AIWorkspaceEdits.exists(id: message.id, project: $0) } == true
+                    return .init(id: message.id, text: message.content, isUser: message.role == .user,
+                        tag: nil, // Mode is draft/request metadata, not transcript content.
+                        revisionTitle: revision ? L10n.get("revision.title") : nil)
+                }, conversationID: conversationID, fontName: panelFontName, fontSize: panelFontSize,
+                   lineSpacing: panelLineSpacing, letterSpacing: panelLetterSpacing,
+                   processingText: processing ? L10n.get("ai.chat.streaming") : nil,
+                   onRevision: onRevision,
+                   onComment: { AIAssistantViewModel.shared.collaboration.submitComment($0) },
+                   commentTitle: L10n.get("collaboration.fromChat"), copyTitle: L10n.get("common.copy"),
+                   projectURL: project,
+                   onOpenFile: { EditorTabManager.shared.openFile(FileSystemItem(url: $0, isDirectory: false)) })
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
             }
         }
+        .clipped()
     }
 }

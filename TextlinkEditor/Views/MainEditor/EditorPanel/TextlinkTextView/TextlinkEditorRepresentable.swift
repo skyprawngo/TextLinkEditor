@@ -11,6 +11,9 @@ import SwiftUI
 
 /// TextlinkEditorView를 SwiftUI에서 사용하기 위한 래퍼
 struct TextlinkEditorRepresentable: NSViewRepresentable {
+    @AppStorage(EditorRulerAppearance.widthKey, store: EditorRulerAppearance.store)
+    private var rulerWidth = EditorRulerAppearance.defaultWidth
+
     @Binding var text: String
     @Binding var cursorLine: Int
     @Binding var cursorColumn: Int
@@ -133,6 +136,7 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
         coordinator.contentRevision = contentRevision
         coordinator.presentedText = text
         configure(host.textView)
+        host.setRulerWidth(rulerWidth)
         if changed || finishedLoading { coordinator.restoreViewport() }
         host.textView.modifiedLines = externallyModifiedLines
         host.verticalRulerView?.needsDisplay = true

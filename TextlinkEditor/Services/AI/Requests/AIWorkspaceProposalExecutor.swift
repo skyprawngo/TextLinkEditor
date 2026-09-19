@@ -1,6 +1,6 @@
 import Foundation
 
-/// Discussion uses a read-only copy; writing shares collaboration's proposal and transaction path.
+/// Conversation and writing share validated proposals; planning uses a read-only copy.
 @MainActor
 final class AIWorkspaceProposalExecutor: AIRequestExecuting {
     let base: any AIRequestExecuting
@@ -39,6 +39,7 @@ final class AIWorkspaceProposalExecutor: AIRequestExecuting {
             // Preserve existing chat comparison UI using only app-applied changes.
             let changes = try store.journals().filter { $0.taskID == requestID && $0.phase == "committed" }
                 .flatMap(\.changes).map { AIWorkspaceChange(relativePath: $0.path, before: $0.before, after: $0.after) }
+            guard !changes.isEmpty else { return result }
             let file = try ManuscriptRevisionBridge.safeStorage(project: project).appendingPathComponent(requestID.uuidString + "-workspace.json")
             try JSONEncoder().encode(AIWorkspaceRevision(id: requestID, changes: changes)).write(to: file, options: .atomic)
             return result

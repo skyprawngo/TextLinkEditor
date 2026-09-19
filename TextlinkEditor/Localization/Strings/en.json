@@ -1,4 +1,8 @@
 {
+  "ai.usage.current": "Current context",
+  "ai.usage.compaction": "Auto-compaction threshold",
+  "ai.usage.compactionNote": "Measured after each response. Codex uses 90% of the model’s effective window for auto-compaction. Progress is unavailable for providers or older records without a known threshold.",
+  "settings.editor.lineNumberWidth": "Line number area width",
   "settings.typography": "Typography",
   "settings.typography.editor": "Editor",
   "settings.typography.sidebar": "Sidebar",
@@ -52,7 +56,7 @@
   "ai.mode.conversation": "Chat",
   "ai.mode.plan": "Plan",
   "ai.mode.write": "Write",
-  "ai.mode.conversationHint": "Explore ideas and questions without changing files.",
+  "ai.mode.conversationHint": "Discuss freely, and create or edit files when requested.",
   "ai.mode.planHint": "Develop a plan across turns without changing files.",
   "ai.mode.writeHint": "Create or revise requested files using the conversation.",
   "ai.mode.unknown": "Commands: /chat, /plan, /write (also /대화, /계획, /작성)",

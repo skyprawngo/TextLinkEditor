@@ -135,6 +135,13 @@ struct AIContextUsage: Codable, Equatable {
     let cachedTokens: Int
     let outputTokens: Int
     let contextWindow: Int?
+    var currentContextTokens: Int? = nil
+    var autoCompactTokenLimit: Int? = nil
+    var compactionProgress: Double? {
+        guard let currentContextTokens, currentContextTokens >= 0,
+              let autoCompactTokenLimit, autoCompactTokenLimit > 0 else { return nil }
+        return min(1, Double(currentContextTokens) / Double(autoCompactTokenLimit))
+    }
     static func parse(_ event: [String: Any]) -> Self? {
         guard let usage = event["usage"] as? [String: Any], let input = usage["input_tokens"] as? Int else { return nil }
         let claude = event["type"] as? String == "result"

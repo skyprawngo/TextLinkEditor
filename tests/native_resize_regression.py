@@ -31,6 +31,21 @@ window.orderFront(nil)
 let text = String(repeating: "한글 장편 원고입니다. 😀 테스트 문장입니다. 폭을 변경할 때 즉시 줄바꿈이 이루어져야 합니다. 긴 문장과 짧은 문장이 함께 있습니다.\n", count: 100000)
 view.load(text, prepared: try! PreparedManuscript.build(text: text, styleKey: "resize", attributes: [.font: NSFont.systemFont(ofSize: 14)]))
 window.displayIfNeeded()
+let bounce = EditorScrollMotion(scroll: host)
+host.contentView.scroll(to: .zero)
+_ = bounce.handle(delta: -100, phase: .changed, momentum: [])
+_ = bounce.handle(delta: 0, phase: .ended, momentum: [])
+bounce.advanceReturn(by: 0.02)
+window.displayIfNeeded()
+let returningY = host.contentView.bounds.minY
+expect(returningY < 0, "native manuscript preserves the stretched viewport during layout")
+_ = bounce.handle(delta: 0, phase: .began, momentum: [])
+_ = bounce.handle(delta: 4, phase: .changed, momentum: [])
+window.displayIfNeeded()
+expect(abs(host.contentView.bounds.minY - returningY - 4) < 1,
+       "native manuscript reverses from the current bounce position without a boundary jump")
+bounce.cancel()
+host.contentView.scroll(to: .zero)
 for fraction in [0.0, 0.5, 0.9] {
     view.setSelectedRange(NSRange(location: Int(Double((text as NSString).length) * fraction), length: 0))
     view.scrollRangeToVisible(view.selectedRange())
@@ -73,6 +88,42 @@ view.insertText("한", replacementRange: NSRange(location: NSNotFound, length: 0
 expect(view.string == "한" + text, "composition commits after resize")
 view.undo(nil)
 expect(view.string == text, "native Undo restores text after resize and composition")
+for source in ["마지막 글씨", "첫 줄\n둘째 줄\n마지막 글씨", "첫 줄\n마지막 글씨\n",
+               String(repeating: "긴 원고 줄\n", count: 100) + "마지막 글씨"] {
+    let view = NativeManuscriptTextView()
+    let host = NativeManuscriptHost(textView: view)
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 540, height: 400),
+                          styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = host
+    window.makeFirstResponder(view)
+    window.orderFront(nil)
+    view.load(source)
+    view.applyDisplayStyle(EditorDisplayStyle(fontName: "Menlo", fontSize: 14, lineHeightMultiple: 1.5, letterSpacing: 0))
+    for height: CGFloat in [400, 750, 300] {
+        window.setContentSize(NSSize(width: 540, height: height))
+        let end = (source as NSString).length
+        view.setSelectedRange(NSRange(location: end, length: 0))
+        view.scrollRangeToVisible(view.selectedRange())
+        window.displayIfNeeded()
+        let targetY = view.lineRect(at: end)!.minY + view.textContainerOrigin.y
+        var proposed = host.contentView.bounds
+        proposed.origin.y = view.frame.maxY + height
+        expect(abs(host.contentView.constrainBoundsRect(proposed).minY - targetY) < 1,
+               "maximum scroll position leaves the final line at viewport top")
+        view.scrollCoordinator.restore(.init(offset: end, screenY: 0))
+        window.displayIfNeeded()
+        let lastLine = view.lineRect(at: end)!
+        expect(abs(lastLine.minY + view.textContainerOrigin.y - host.contentView.bounds.minY) < 1,
+               "last line can reach viewport top at every window height")
+        expect(view.string == source, "scroll space adds no manuscript characters")
+        view.insertText("끝", replacementRange: NSRange(location: NSNotFound, length: 0))
+        expect(view.string == source + "끝", "last line remains editable at viewport top")
+        view.undo(nil)
+        expect(view.string == source, "Undo preserves document after editing above scroll space")
+    }
+    window.close()
+}
 print("NATIVE RESIZE REGRESSION COMPLETED")
 '''
 with tempfile.TemporaryDirectory(prefix='textlink-resize-test-') as directory:

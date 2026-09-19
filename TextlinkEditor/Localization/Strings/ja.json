@@ -1,4 +1,8 @@
 {
+  "ai.usage.current": "現在のコンテキスト",
+  "ai.usage.compaction": "自動圧縮の基準",
+  "ai.usage.compactionNote": "応答完了時の使用量です。Codexはモデルの有効上限の90%で自動圧縮します。基準が不明なプロバイダーや過去の記録では進捗を表示しません。",
+  "settings.editor.lineNumberWidth": "行番号領域の幅",
   "settings.typography": "文字",
   "settings.typography.editor": "エディタ",
   "settings.typography.sidebar": "サイドバー",
@@ -52,7 +56,7 @@
   "ai.mode.conversation": "会話",
   "ai.mode.plan": "計画",
   "ai.mode.write": "執筆",
-  "ai.mode.conversationHint": "ファイルを変更せず、アイデアや質問を話し合います。",
+  "ai.mode.conversationHint": "自由に対話し、依頼に応じてファイルを作成・編集します。",
   "ai.mode.planHint": "会話を重ねて計画を具体化します。ファイルは変更しません。",
   "ai.mode.writeHint": "会話を基に、依頼されたファイルを作成・編集します。",
   "ai.mode.unknown": "コマンド: /chat, /plan, /write（/대화, /계획, /작성 も使用可能）",

@@ -11,6 +11,7 @@ xcrun swiftc -parse-as-library \
   TextlinkEditor/Services/AI/Auth/ChatGPTAccountService.swift \
   TextlinkEditor/Services/AI/CLI/CLIProcessManager.swift \
   TextlinkEditor/Services/AI/CLI/CLIJSONStream.swift \
+  TextlinkEditor/Services/AI/CLI/CodexContextMeter.swift \
   TextlinkEditor/Services/AI/CLI/CLIRequestRunner.swift \
   TextlinkEditor/Services/AI/Chat/*.swift \
   TextlinkEditor/Services/AI/Preferences/*.swift \

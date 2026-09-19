@@ -28,9 +28,11 @@ struct WritingWorkspaceView: View {
             HStack {
                 Text(L10n.get("writing.ui.1")).font(.headline)
                 Spacer()
-                Picker(L10n.get("writing.ui.2"), selection: $page) {
-                    Text(L10n.get("writing.ui.3")).tag(0); Text(L10n.get("writing.ui.4")).tag(1); Text(L10n.get("writing.ui.5")).tag(2)
-                }.pickerStyle(.segmented).frame(width: 340)
+                LiquidGlassSegmentedControl(
+                    title: L10n.get("writing.ui.2"), selection: $page,
+                    options: [0, 1, 2],
+                    label: { L10n.get("writing.ui.\($0 + 3)") }
+                ).frame(width: 340)
                 Spacer()
                 Button(L10n.get("writing.ui.6")) { save() }.disabled(!loaded || busy || document == savedDocument)
                 Button(L10n.get("writing.ui.7")) { if document != savedDocument { showDiscard = true } else { dismiss() } }

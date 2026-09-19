@@ -104,6 +104,7 @@ private struct ProjectSearchPresentation: Identifiable {
 }
 
 struct MainEditorView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var projectManager: ProjectManager
     @EnvironmentObject var appCommands: AppCommands
     @Environment(\.openWindow) private var openWindow
@@ -166,7 +167,12 @@ struct MainEditorView: View {
                     .gesture(DragGesture(coordinateSpace: .global).onChanged { value in
                         if panelDragStartWidth == nil { panelDragStartWidth = resolvedAIPanelWidth }
                         let maximum = min(600, max(280, windowWidth - (columnVisibility == .detailOnly ? 0 : sidebarWidth) - 360))
-                        aiPanelWidth = min(maximum, max(280, (panelDragStartWidth ?? resolvedAIPanelWidth) - value.translation.width))
+                        let width = min(maximum, max(280, (panelDragStartWidth ?? resolvedAIPanelWidth) - value.translation.width)).rounded()
+                        if aiPanelWidth != width {
+                            var transaction = Transaction()
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) { aiPanelWidth = width }
+                        }
                     }.onEnded { _ in
                         UserSettings.shared.aiAssistantPanelWidth = aiPanelWidth
                         panelDragStartWidth = nil
@@ -177,14 +183,23 @@ struct MainEditorView: View {
                     projectFolderURL: projectManager.currentProject?.path,
                     isInDetailView: $isAIDetailView
                     )
-                    .opacity(assistant.collaboration.showingPanel ? 0 : 1)
+                    .offset(x: assistant.collaboration.showingPanel && !reduceMotion ? resolvedAIPanelWidth : 0)
+                    .opacity(assistant.collaboration.showingPanel && reduceMotion ? 0 : 1)
                     .accessibilityHidden(assistant.collaboration.showingPanel)
                     .allowsHitTesting(!assistant.collaboration.showingPanel)
                     if assistant.collaboration.showingPanel {
                         CollaborationView(coordinator: assistant.collaboration, git: git)
+                            .transition(reduceMotion ? .opacity : .asymmetric(
+                                insertion: .move(edge: .leading),
+                                removal: .move(edge: .trailing)
+                            ))
+                            .zIndex(1)
                     }
                 }
+                .animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.28), value: assistant.collaboration.showingPanel)
                 .frame(width: resolvedAIPanelWidth)
+                .clipped()
+                .environment(\.aiPanelIsResizing, panelDragStartWidth != nil)
             }
             .frame(width: resolvedAIPanelWidth + 7)
             // Keep the panel alive, but resize the editor once rather than on every animation frame.

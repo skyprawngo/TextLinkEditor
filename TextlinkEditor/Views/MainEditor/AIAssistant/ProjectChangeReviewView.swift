@@ -19,9 +19,10 @@ struct ProjectChangeReviewView: View {
                 Text(L10n.get("git.collaborationHint")).font(.callout).foregroundStyle(.secondary)
             } else {
                 Label(model.snapshot.branch, systemImage: "arrow.triangle.branch").font(.caption).foregroundStyle(.secondary)
-                Picker(L10n.get("git.changeSource"), selection: $model.scope) {
-                    ForEach(ProjectGitScope.allCases) { scope in Text(scope.title).tag(scope) }
-                }.pickerStyle(.segmented)
+                LiquidGlassSegmentedControl(
+                    title: L10n.get("git.changeSource"), selection: $model.scope,
+                    options: ProjectGitScope.allCases, label: { $0.title }
+                )
                 let changes = model.snapshot.changes.filter { model.scope == .staged ? $0.staged : $0.unstaged }
                 if changes.isEmpty { Text(L10n.get("git.clean")).font(.callout).foregroundStyle(.secondary) }
                 ForEach(changes) { change in

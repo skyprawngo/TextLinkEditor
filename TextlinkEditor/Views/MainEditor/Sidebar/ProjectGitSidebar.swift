@@ -3,6 +3,10 @@ import SwiftUI
 struct ProjectGitSidebar: View {
     @Bindable var model: ProjectGitModel
     let collaboration: CollaborationCoordinator
+    var availableHeight: CGFloat = 420
+    @State private var layout = ProjectSidebarLayout()
+    @State private var dragStart: Double?
+    @State private var layoutProject: URL?
     @AppStorage("git.sidebar.changesExpanded") private var changesExpanded = true
     @AppStorage("git.sidebar.graphExpanded") private var graphExpanded = true
     @State private var confirmInitialize = false
@@ -12,6 +16,7 @@ struct ProjectGitSidebar: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            resizeDivider(graph: false)
             header("git.changes", expanded: $changesExpanded, count: model.snapshot.changes.count)
             if changesExpanded {
                 VStack(alignment: .leading, spacing: 7) {
@@ -31,10 +36,12 @@ struct ProjectGitSidebar: View {
                                 group(.working)
                                 if model.snapshot.changes.isEmpty { Text(L10n.get("git.clean")).font(.caption).foregroundStyle(.secondary) }
                             }
-                        }.frame(maxHeight: 135)
+                        }.frame(maxHeight: .infinity)
                     }
                 }.padding(.horizontal, 10).padding(.bottom, 8)
+                    .frame(height: displayedChangesHeight, alignment: .top)
             }
+            resizeDivider(graph: true)
             header("git.graph", expanded: $graphExpanded, count: model.snapshot.commits.count)
             if graphExpanded {
                 ScrollView {
@@ -54,10 +61,19 @@ struct ProjectGitSidebar: View {
                             }.buttonStyle(.plain).help(commit.subject + "\n" + commit.author + " · " + commit.date)
                         }
                     }.padding(.horizontal, 6)
-                }.frame(maxHeight: 160)
+                }.frame(height: displayedGraphHeight)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
+        .task(id: model.project) {
+            dragStart = nil
+            layoutProject = model.project
+            layout = ProjectSidebarLayout()
+            if let project = model.project {
+                do { layout = try ProjectSidebarLayout.load(from: project) }
+                catch { model.error = error.localizedDescription }
+            }
+        }
         .confirmationDialog(L10n.get("git.initializeConfirm"), isPresented: $confirmInitialize) {
             Button(L10n.get("git.initialize")) { model.perform { try $0.initialize() } }
         }
@@ -72,6 +88,41 @@ struct ProjectGitSidebar: View {
         .sheet(isPresented: Binding(get: { model.commitDetails != nil }, set: { if !$0 { model.commitDetails = nil } })) {
             CommitDiffView(patch: model.commitDetails ?? "") { model.commitDetails = nil }
         }
+    }
+    private var contentBudget: Double { max(140, availableHeight - 70) }
+    private var displayedChangesHeight: Double {
+        guard changesExpanded else { return 0 }
+        let graphMinimum = graphExpanded ? 60.0 : 0
+        return min(layout.changesHeight, max(140, contentBudget - graphMinimum))
+    }
+    private var displayedGraphHeight: Double {
+        guard graphExpanded else { return 0 }
+        return min(layout.graphHeight, max(60, contentBudget - displayedChangesHeight))
+    }
+    private func resizeDivider(graph: Bool) -> some View {
+        Rectangle().fill(AppColors.separator).frame(height: 1)
+            .padding(.vertical, 3)
+            .background(SidebarRowResizeCursor())
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { value in
+                    guard layoutProject == model.project, graph ? graphExpanded : changesExpanded else { return }
+                    if dragStart == nil { dragStart = graph ? displayedGraphHeight : displayedChangesHeight }
+                    let other = graph ? (changesExpanded ? 140.0 : 0) : displayedGraphHeight
+                    let minimum = graph ? 60.0 : 140
+                    let height = min(max(minimum, contentBudget - other), max(minimum, (dragStart ?? minimum) - value.translation.height))
+                    if graph {
+                        layout.graphHeight = height
+                        if changesExpanded { layout.changesHeight = min(layout.changesHeight, max(140, contentBudget - height)) }
+                    } else { layout.changesHeight = height }
+                }.onEnded { _ in
+                    guard dragStart != nil else { return }
+                    dragStart = nil
+                    guard let project = layoutProject, project == model.project else { return }
+                    do { try layout.save(to: project) }
+                    catch { model.error = error.localizedDescription }
+                })
+            .allowsHitTesting(graph ? graphExpanded : changesExpanded)
     }
     private var commitButton: some View {
         HStack(spacing: 0) {
@@ -96,7 +147,6 @@ struct ProjectGitSidebar: View {
     }
     private func header(_ key: String, expanded: Binding<Bool>, count: Int) -> some View {
         VStack(spacing: 0) {
-            Divider()
             HStack(spacing: 5) {
                 Button { expanded.wrappedValue.toggle() } label: {
                     HStack(spacing: 5) {

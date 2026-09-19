@@ -48,7 +48,7 @@ enum OpaqueTheme: ThemePalette, ThemePaletteNSColor {
     static var barBackground: Color { bgMedium }
     static var sidebarBackground: Color { bgMedium }
     static var contentBackground: Color { bgDark }
-    static var textEditorBackground: Color { bgDark }
+    static var textEditorBackground: Color { Color(nsColor: nsTextEditorBackground) }
     static var controlBackground: Color { bgLight }
 
     // MARK: - Text
@@ -136,7 +136,7 @@ enum OpaqueTheme: ThemePalette, ThemePaletteNSColor {
     }
 
     static var nsTextEditorBackground: NSColor {
-        NSColor(red: 0.08, green: 0.08, blue: 0.10, alpha: 1.0)
+        NSColor(red: 0.065, green: 0.065, blue: 0.08, alpha: 1.0)
     }
 
     static var nsCurrentLineHighlight: NSColor {

@@ -1,4 +1,8 @@
 {
+  "ai.usage.current": "현재 컨텍스트",
+  "ai.usage.compaction": "자동 압축 기준",
+  "ai.usage.compactionNote": "응답 완료 시 측정한 사용량입니다. Codex는 모델 유효 한도의 90%를 압축 기준으로 사용합니다. 기준을 확인할 수 없는 제공자·이전 기록은 진행률을 표시하지 않습니다.",
+  "settings.editor.lineNumberWidth": "줄 번호 영역 폭",
   "settings.typography": "글자",
   "settings.typography.editor": "에디터",
   "settings.typography.sidebar": "사이드 바",
@@ -52,7 +56,7 @@
   "ai.mode.conversation": "대화",
   "ai.mode.plan": "계획",
   "ai.mode.write": "작성",
-  "ai.mode.conversationHint": "아이디어와 질문을 자유롭게 나눕니다. 파일은 변경하지 않습니다.",
+  "ai.mode.conversationHint": "자유롭게 대화하며, 요청하면 파일도 생성·수정합니다.",
   "ai.mode.planHint": "여러 차례 대화로 구체화합니다. 파일은 변경하지 않습니다.",
   "ai.mode.writeHint": "대화를 바탕으로 요청한 파일을 생성·수정합니다.",
   "ai.mode.unknown": "지원 명령: /대화, /계획, /작성 (또는 /chat, /plan, /write)",

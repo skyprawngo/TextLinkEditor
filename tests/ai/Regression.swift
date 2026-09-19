@@ -116,6 +116,28 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         let usageMessage = AIMessage(role: .assistant, content: "answer", usage: usage)
         let decodedUsageMessage = try JSONDecoder().decode(AIMessage.self, from: JSONEncoder().encode(usageMessage))
         expect(decodedUsageMessage == usageMessage, "usage survives history encoding")
+        expect(usage.compactionProgress == nil, "billing totals never become context progress")
+        let legacyUsage = try JSONDecoder().decode(AIContextUsage.self, from: Data("{\"inputTokens\":12,\"cachedTokens\":0,\"outputTokens\":3}".utf8))
+        expect(legacyUsage.compactionProgress == nil, "legacy records retain unknown context")
+        let meterRoot = folder.appendingPathComponent("meter")
+        let meterID = UUID().uuidString
+        let meterSessions = meterRoot.appendingPathComponent("sessions/2026/09/20")
+        try FileManager.default.createDirectory(at: meterSessions, withIntermediateDirectories: true)
+        try Data("{\"models\":[{\"slug\":\"fixture\",\"context_window\":100000,\"effective_context_window_percent\":95}]}".utf8)
+            .write(to: meterRoot.appendingPathComponent("models_cache.json"))
+        let limit = CodexContextMeter.threshold(model: "fixture", root: meterRoot)
+        expect(limit == 85500 && CodexContextMeter.threshold(model: "unknown", root: meterRoot) == nil, "threshold uses only known model metadata")
+        let tokenEvent = Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"total_tokens\":999999},\"last_token_usage\":{\"total_tokens\":42750},\"model_context_window\":95000}}}".utf8)
+        let meterFile = meterSessions.appendingPathComponent("rollout-test-\(meterID).jsonl")
+        try tokenEvent.write(to: meterFile)
+        let measured = CodexContextMeter.read(sessionID: meterID, root: meterRoot, limit: limit, usage: usage)!
+        expect(measured.compactionProgress == 0.5 && measured.inputTokens == 1200, "context progress remains separate from billing")
+        expect(CodexContextMeter.latestObservation(lines: [tokenEvent, Data("{\"type\":\"compacted\"}".utf8)]) == nil, "compaction invalidates stale counts")
+        let reducedEvent = Data(String(decoding: tokenEvent, as: UTF8.self).replacingOccurrences(of: "42750", with: "4000").utf8)
+        expect(CodexContextMeter.latestObservation(lines: [tokenEvent, Data("{\"type\":\"compacted\"}".utf8), reducedEvent])?.tokens == 4000, "post-compaction count replaces high-water mark")
+        expect(CodexContextMeter.read(sessionID: "../../outside", root: meterRoot, limit: limit, usage: usage) == usage, "invalid session paths rejected")
+        let decodedMeter = try JSONDecoder().decode(AIContextUsage.self, from: JSONEncoder().encode(measured))
+        expect(decodedMeter == measured, "context observation persists")
         let b = folder.appendingPathComponent("B.weaveproj")
         let root = UUID()
         let user = AIMessage(id: root, role: .user, content: "first", conversationId: root)
@@ -249,7 +271,14 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         expect(vm.messages.count == 1 && vm.messages[0].id == bUser.id, "Project switch drops old callbacks")
         expect(ChatHistoryManager.shared.loadSession(from: a)?.messages.last?.outcome == "cancelled", "Cancelled turn belongs to originating project")
         expect(ChatHistoryManager.shared.loadSession(from: b)?.messages.count == 1, "Old answer cannot overwrite B last card")
-        try fixture("printf '%s\\n' \"$@\" > arguments.log\ncat > prompt.log\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"new response\",\"session_id\":\"new\"}'\n")
+        func conversationFixture() throws {
+            let proposal = "{\"summary\":\"new response\",\"edits\":[],\"questions\":[],\"facts\":[]}"
+            func event(_ text: String) throws -> String {
+                String(decoding: try JSONSerialization.data(withJSONObject: ["type": "result", "subtype": "success", "result": text, "session_id": "new"], options: [.sortedKeys]), as: UTF8.self)
+            }
+            try fixture("printf '%s\\n' \"$@\" > arguments.log\ncat > prompt.log\nif grep -q 'Return ONLY one JSON object' '\(folder.path)/prompt.log'; then\nprintf '%s\\n' '\(try event(proposal))'\nelse\nprintf '%s\\n' '\(try event("new response"))'\nfi\n")
+        }
+        try conversationFixture()
         vm.inputText = "B followup"
         vm.sendMessage(continueFromCardId: bUser.id)
         while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
@@ -263,10 +292,14 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         expect(planningPrompt.contains("Current mode: planning") && planningPrompt.contains("B followup"), "planning retains completed conversation and explicit read-only mode")
         expect(vm.messages.last?.content == "new response", "planning returns prose without proposal parsing")
         expect(vm.messages.dropLast().last?.content == "던전의 규칙을 함께 구상하자" && vm.messages.dropLast().last?.chatMode == "plan", "suffix command persists as message tag instead of body text")
+        expect(vm.chatMode == .conversation, "sent planning tag is consumed for the next message")
+        let draftTag = AIChatMode.extractDraftTag("앞 /작성 뒤", selection: NSRange(location: 5, length: 0))!
+        expect(draftTag.mode == .write && draftTag.body == "앞  뒤" && draftTag.selection.location == 2,
+               "typed command becomes tag while preserving surrounding spaces and caret")
         vm.setProject(a)
         vm.setProject(b)
         expect(vm.selectedCardId == bUser.id, "Reopening project restores its latest normal chat")
-        expect(vm.chatMode == .plan, "conversation mode survives project reopen")
+        expect(vm.chatMode == .conversation, "reopening history does not reuse a previous command")
         vm.inputText = "resume from project files"
         vm.sendMessage()
         while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
@@ -280,7 +313,7 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         vm.sendMessage()
         while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
         expect(vm.resumableSession(for: bUser.id, provider: .claude) == nil, "Failed session is detached")
-        try fixture("cat > prompt.log\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"new response\",\"session_id\":\"new\"}'\n")
+        try conversationFixture()
         vm.sendMessage()
         while vm.isProcessing { try await Task.sleep(nanoseconds: 20_000_000) }
         let retryArguments = try String(contentsOf: folder.appendingPathComponent("arguments.log"), encoding: .utf8)
