@@ -62,6 +62,26 @@ import AppKit
         _ = bounce.handle(delta: 0, phase: .ended, momentum: [])
         for _ in 0..<120 { bounce.advanceReturn(by: 1.0 / 120) }
         precondition(clip.bounds.minY == bottom)
+        // Trackpad momentum can outlive the return animation. Neither edge may
+        // start a second bounce while the same inertial gesture is still arriving.
+        for (edge, outward) in [(top, CGFloat(-1)), (bottom, CGFloat(1))] {
+            bounce.cancel()
+            place(edge - outward * 5)
+            _ = bounce.handle(delta: outward * 80, phase: [], momentum: .began)
+            var previousDistance = abs(clip.bounds.minY - edge)
+            for _ in 0..<240 {
+                _ = bounce.handle(delta: outward * 8, phase: [], momentum: .changed)
+                bounce.advanceReturn(by: 1.0 / 120)
+                let distance = abs(clip.bounds.minY - edge)
+                precondition(distance <= previousDistance, "residual momentum restarts the bounce at \(edge)")
+                previousDistance = distance
+            }
+            precondition(clip.bounds.minY == edge)
+            _ = bounce.handle(delta: outward * 2, phase: [], momentum: .ended)
+            precondition(clip.bounds.minY == edge, "terminal momentum must not restart the bounce")
+            _ = bounce.handle(delta: -outward * 10, phase: .began, momentum: [])
+            precondition(clip.bounds.minY == edge - outward * 10, "fresh input must resume immediately")
+        }
         print("PASS elastic return, continuous reversal, interruption, in-document continuity, momentum, insets and mouse wheel")
     }
 }

@@ -20,6 +20,24 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
         super.mouseDown(with: event)
     }
 
+    override func scrollRangeToVisible(_ range: NSRange) {
+        guard range.length == 0, let scroll = enclosingScrollView,
+              let line = lineRect(at: range.location) else {
+            super.scrollRangeToVisible(range)
+            return
+        }
+        let clip = scroll.contentView
+        let rect = line.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        let top = clip.bounds.minY + clip.contentInsets.top
+        let bottom = clip.bounds.maxY - clip.contentInsets.bottom
+        var point = clip.bounds.origin
+        if rect.minY < top { point.y += rect.minY - top }
+        else if rect.maxY > bottom { point.y += rect.maxY - bottom }
+        guard point != clip.bounds.origin else { return }
+        clip.scroll(to: point)
+        scroll.reflectScrolledClipView(clip)
+    }
+
     func setMarkdownRendering(_ enabled: Bool) {
         markdownPresentation.setMarkdownRendering(enabled, editor: self, style: displayStyle, generation: textEditGeneration)
     }
@@ -29,7 +47,8 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
     }
     private(set) var inlinePanel: NSView?
     private var inlineAnchor = 0
-    private let inlineHeight: CGFloat = 100
+    private let inlineTopMargin: CGFloat = 8
+    private var inlineHeight: CGFloat { 100 + inlineTopMargin }
 
     private let documentUndoManager = UndoManager()
     override var undoManager: UndoManager? { documentUndoManager }
@@ -39,7 +58,7 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
     private var lineIndexNeedsUpdate = true
     private var storageEditObserver: NSObjectProtocol?
     private(set) var lastIndexedUTF16Count = 0
-    private var textEditGeneration = 0
+    fileprivate private(set) var textEditGeneration = 0
     var styleKey = ""
     var modifiedLines: Set<Int> = []
 
@@ -576,7 +595,7 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
               let location = textLocation(at: inlineAnchor),
               let fragment = layoutFragment(at: location),
               fragment.state == .layoutAvailable else { return }
-        let y = fragment.layoutFragmentFrame.maxY - inlineHeight + textContainerOrigin.y
+        let y = fragment.layoutFragmentFrame.maxY - inlineHeight + inlineTopMargin + textContainerOrigin.y
         // The document view may temporarily retain a wider frame during split-view
         // animation. Size against the clip view, not the manuscript's content width.
         let viewport = enclosingScrollView.map { convert($0.contentView.bounds, from: $0.contentView) } ?? bounds
@@ -590,7 +609,7 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
             left = max(left, min(viewport.maxX, rulerFrame.maxX))
         }
         panel.frame = NSRect(x: left + inset, y: y,
-                             width: max(0, viewport.maxX - left - 2 * inset), height: inlineHeight - 8)
+                             width: max(0, viewport.maxX - left - 2 * inset), height: inlineHeight - inlineTopMargin - 8)
     }
 
     func textLayoutManager(_ textLayoutManager: NSTextLayoutManager,
@@ -731,6 +750,8 @@ final class NativeManuscriptHost: NSScrollView {
     }
 
     private var updatingBottomSpace = false
+    private var measuredTail: (editor: ObjectIdentifier, generation: Int, width: CGFloat,
+                               style: String, contentHeight: CGFloat, tailHeight: CGFloat)?
     func updateBottomScrollSpace() {
         guard !updatingBottomSpace, let editor = documentView as? NativeManuscriptTextView else { return }
         updatingBottomSpace = true
@@ -739,6 +760,13 @@ final class NativeManuscriptHost: NSScrollView {
         let multiple = editor.defaultParagraphStyle?.lineHeightMultiple ?? 1
         var tailHeight = (font.ascender - font.descender + font.leading) * max(1, multiple)
             + editor.textContainerInset.height
+        var contentHeight = editor.frame.height
+        if let measuredTail, measuredTail.editor == ObjectIdentifier(editor),
+           measuredTail.generation == editor.textEditGeneration,
+           measuredTail.width == editor.frame.width, measuredTail.style == editor.styleKey {
+            tailHeight = measuredTail.tailHeight
+            contentHeight = measuredTail.contentHeight
+        }
         // Use the final visual line once TextKit has laid it out. Do not force a
         // large document's offscreen tail to lay out merely to size scroll space.
         if let manager = editor.textLayoutManager, let content = manager.textContentManager,
@@ -746,15 +774,22 @@ final class NativeManuscriptHost: NSScrollView {
            viewport.endLocation.compare(content.documentRange.endLocation) == .orderedSame,
            let lastLine = editor.lineRect(at: editor.textStorage?.length ?? 0) {
             tailHeight = lastLine.height + editor.textContainerInset.height
+            // NSTextView's minimum frame can fill the viewport for short files.
+            // Add space after the actual final line, not after that minimum frame.
+            contentHeight = lastLine.maxY + editor.textContainerOrigin.y + editor.textContainerInset.height
+            // Stretching beyond EOF can temporarily leave TextKit's viewport
+            // empty. Keep the measured extent instead of growing it mid-bounce.
+            measuredTail = (ObjectIdentifier(editor), editor.textEditGeneration, editor.frame.width,
+                            editor.styleKey, contentHeight, tailHeight)
         }
         // Include AppKit's accessory inset and the text view's own bottom padding
         // so the maximum scroll position aligns the final line with the top.
-        let accessoryInset = max(0, contentView.contentInsets.bottom - contentInsets.bottom)
+        let accessoryInset = max(0, contentView.contentInsets.bottom)
         let bottomSpace = max(0, contentView.bounds.height - tailHeight - accessoryInset)
-        if contentInsets.bottom != bottomSpace {
-            var insets = contentInsets
-            insets.bottom = bottomSpace
-            contentInsets = insets
+        let scrollableHeight = contentHeight + bottomSpace
+        if let clip = contentView as? EditorBounceClipView, clip.scrollableDocumentHeight != scrollableHeight {
+            clip.scrollableDocumentHeight = scrollableHeight
+            reflectScrolledClipView(clip)
         }
     }
     override func accessibilityChildren() -> [Any]? {

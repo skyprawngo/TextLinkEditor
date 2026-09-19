@@ -160,8 +160,9 @@ expect(abs(resizingPanel.frame.maxX - (clipFrame.maxX - view.textContainerOrigin
 let input = NSTextField(frame: NSRect(x: 12, y: 12, width: 180, height: 24))
 resizingPanel.addSubview(input)
 window.makeFirstResponder(input)
-let shortcut = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .option],
-    timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "i", charactersIgnoringModifiers: "i",
+let inlineTool = EditorToolRegistry.definition("ai.inline")!
+let shortcut = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: inlineTool.modifiers,
+    timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: inlineTool.key, charactersIgnoringModifiers: inlineTool.key,
     isARepeat: false, keyCode: 34)!
 let beforeToggle = view.string
 expect(view.performKeyEquivalent(with: shortcut), "inline shortcut handles focused input field editor")

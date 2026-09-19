@@ -1,6 +1,17 @@
 import AppKit
 
 final class EditorBounceClipView: NSClipView {
+    // Scroll-past-end space belongs to the document extent, not contentInsets:
+    // AppKit excludes contentInsets from mouse hit testing and caret visibility.
+    var scrollableDocumentHeight: CGFloat = 0
+    override var documentRect: NSRect {
+        var rect = super.documentRect
+        if let documentView {
+            let document = convert(documentView.bounds, from: documentView)
+            rect.size.height = max(rect.height, document.minY + scrollableDocumentHeight - rect.minY)
+        }
+        return rect
+    }
     var allowsTopStretch = false
     var allowsBottomStretch = false
     func documentBounds(_ proposed: NSRect) -> NSRect { super.constrainBoundsRect(proposed) }
@@ -20,6 +31,9 @@ final class EditorScrollMotion {
     private var previousTick: TimeInterval = 0
     private var ownsStretch = false
     private var stretchesTop = true
+    // The input gesture can keep sending momentum after the spring has settled.
+    // Retain this until fresh direct input, independently of animation lifetime.
+    private var suppressesMomentum = false
 
     init(scroll: NSScrollView) { self.scroll = scroll }
     deinit { timer?.invalidate() }
@@ -38,9 +52,12 @@ final class EditorScrollMotion {
         let top = boundary(clip, top: true)
         let bottom = boundary(clip, top: false)
         let y = clip.bounds.minY
-        if !momentum.isEmpty && ownsStretch {
+        if !momentum.isEmpty && (suppressesMomentum || ownsStretch) {
             startReturn()
             return true
+        }
+        if momentum.isEmpty && (phase.isEmpty || phase.contains(.began) || phase.contains(.changed)) {
+            suppressesMomentum = false
         }
         cancelReturn()
         let target = y + delta
@@ -78,6 +95,11 @@ final class EditorScrollMotion {
     }
 
     func cancel() {
+        suppressesMomentum = false
+        finishReturn()
+    }
+
+    private func finishReturn() {
         cancelReturn()
         ownsStretch = false
         (scroll?.contentView as? EditorBounceClipView)?.allowsTopStretch = false
@@ -100,6 +122,7 @@ final class EditorScrollMotion {
 
     private func startReturn() {
         guard ownsStretch, timer == nil else { return }
+        suppressesMomentum = true
         previousTick = ProcessInfo.processInfo.systemUptime
         let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -112,12 +135,12 @@ final class EditorScrollMotion {
     }
 
     func advanceReturn(by elapsed: TimeInterval) {
-        guard ownsStretch, let scroll else { cancel(); return }
+        guard ownsStretch, let scroll else { finishReturn(); return }
         let clip = scroll.contentView
         let edge = boundary(clip, top: stretchesTop)
         let sign: CGFloat = stretchesTop ? -1 : 1
         let distance = (clip.bounds.minY - edge) * sign
-        guard distance > 0 else { cancel(); return }
+        guard distance > 0 else { finishReturn(); return }
         var point = clip.bounds.origin
         // Clip views align their bounds to backing pixels; finish before rounding
         // can leave a subpixel step repeating forever.
@@ -128,6 +151,6 @@ final class EditorScrollMotion {
         point.y = finished ? edge : edge + sign * remaining
         clip.setBoundsOrigin(point)
         scroll.reflectScrolledClipView(clip)
-        if finished { cancel() }
+        if finished { finishReturn() }
     }
 }

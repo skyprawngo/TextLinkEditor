@@ -80,6 +80,45 @@ for i in 0..<8 {
     precondition(host.contentView.bounds.minY.isFinite && view.frame.height.isFinite,
                  "scroll animation produced invalid geometry")
 }
+for outward: CGFloat in [-1, 1] {
+    let clip = host.contentView as! EditorBounceClipView
+    var proposal = clip.bounds
+    proposal.origin.y = outward < 0 ? -1000000 : 1000000
+    clip.setBoundsOrigin(clip.documentBounds(proposal).origin)
+    window.displayIfNeeded()
+    proposal = clip.bounds
+    proposal.origin.y = outward < 0 ? -1000000 : 1000000
+    let edge = clip.documentBounds(proposal).minY
+    clip.setBoundsOrigin(NSPoint(x: clip.bounds.minX, y: edge))
+    event.gesture = .began; event.momentum = []; event.amount = 0
+    host.scrollWheel(with: event)
+    event.gesture = .changed; event.amount = -outward * 80
+    host.scrollWheel(with: event)
+    event.gesture = .ended; event.amount = 0
+    host.scrollWheel(with: event)
+    event.gesture = []; event.momentum = .began; event.amount = -outward * 8
+    host.scrollWheel(with: event)
+    var previousDistance = abs(clip.bounds.minY - edge)
+    for _ in 0..<100 {
+        event.momentum = .changed
+        host.scrollWheel(with: event)
+        window.displayIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        let distance = abs(clip.bounds.minY - edge)
+        precondition(distance <= previousDistance + 0.01, "native layout or residual momentum reverses edge return")
+        previousDistance = distance
+    }
+    precondition(abs(clip.bounds.minY - edge) < 1, "edge return must settle")
+    event.momentum = .ended; event.amount = -outward * 2
+    host.scrollWheel(with: event)
+    precondition(abs(clip.bounds.minY - edge) < 1)
+    event.momentum = []; event.gesture = .began; event.amount = outward * 12
+    host.scrollWheel(with: event)
+    precondition(abs(clip.bounds.minY - (edge - outward * 12)) < 1, "fresh gesture must resume from the settled edge")
+    event.gesture = .ended; event.amount = 0
+    host.scrollWheel(with: event)
+}
+print("PASS monotonic top and bottom return with residual momentum")
 let original = view.string
 view.insertText("입력", replacementRange: NSRange(location: 0, length: 0))
 precondition(view.string == "입력" + original, "editor does not respond after repeated top scrolling")
