@@ -39,7 +39,9 @@ final class MarkdownPresentationController {
             for key in MarkdownSourceStyling.ownedKeys { storage.removeAttribute(key, range: whole) }
             if rendersMarkdown {
                 if parsedGeneration != generation || parsedDocument == nil {
-                    parsedDocument = MarkdownSyntaxDocument(source: storage.string)
+                    if let window = editor.windowedDocument {
+                        parsedDocument = window.document.markdown(in: window.range)
+                    } else { parsedDocument = MarkdownSyntaxDocument(source: storage.string) }
                     parsedGeneration = generation
                 }
                 MarkdownSourceStyling.apply(to: storage, selection: editor.selectedRange(),

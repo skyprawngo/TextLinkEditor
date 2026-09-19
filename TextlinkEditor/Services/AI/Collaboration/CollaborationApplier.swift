@@ -9,12 +9,28 @@ struct CollaborationApplier {
 
     func apply(taskID: UUID, before: [String: String], changes: [CollaborationChange]) throws -> UUID? {
         try checkEditor()
-        guard try store.snapshot() == before else { throw CollaborationFailure.conflict }
+        let current = try store.snapshot()
         let protections = try store.load().protectedPaths
         guard Set(changes.map(\.path)).count == changes.count else { throw CollaborationFailure.invalidResponse }
         for change in changes {
             _ = try store.file(change.path)
             guard !protections.contains(change.path), before[change.path] == change.before else { throw CollaborationFailure.conflict }
+        }
+        // Rebase only files touched by this proposal. Journal actual pre/post images,
+        // so rollback and Undo preserve edits made while the provider was responding.
+        let changes = try changes.compactMap { change -> CollaborationChange? in
+            let latest = current[change.path]
+            let merged: String?
+            if let base = change.before, let proposed = change.after, let latest {
+                do { merged = try ManuscriptTextMerge.merge(base: base, current: latest, proposed: proposed,
+                                                           allowingProposedDeletions: true) }
+                catch { throw CollaborationFailure.conflict }
+            } else {
+                // Creating/deleting a file still requires exact ownership.
+                guard latest == change.before else { throw CollaborationFailure.conflict }
+                merged = change.after
+            }
+            return latest == merged ? nil : CollaborationChange(path: change.path, before: latest, after: merged)
         }
         guard !changes.isEmpty else { return nil }
         var record = CollaborationTransaction(taskID: taskID, changes: changes)
@@ -111,8 +127,13 @@ struct CollaborationApplier {
         var desired = current
         for record in records.reversed() {
             for change in record.changes {
-                guard desired[change.path] == change.after else { throw CollaborationFailure.conflict }
-                desired[change.path] = change.before
+                if let after = change.after, let before = change.before, let latest = desired[change.path] {
+                    do { desired[change.path] = try ManuscriptTextMerge.merge(base: after, current: latest, proposed: before) }
+                    catch { throw CollaborationFailure.conflict }
+                } else {
+                    guard desired[change.path] == change.after else { throw CollaborationFailure.conflict }
+                    desired[change.path] = change.before
+                }
             }
         }
         let changes = CollaborationStore.changes(from: current, to: desired)

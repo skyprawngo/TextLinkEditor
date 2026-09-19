@@ -172,7 +172,9 @@ struct ProjectGitSidebar: View {
                             Image(systemName: "doc.text").font(.system(size: 10)).foregroundStyle(.secondary)
                             Text(change.path).font(.system(size: 11)).lineLimit(1).truncationMode(.middle)
                             Spacer(minLength: 0)
-                            Text(scope == .staged ? change.index : change.worktree).font(.system(size: 10, weight: .medium)).foregroundStyle(.orange)
+                            Text(change.untracked ? "U" : (scope == .staged ? change.index : change.worktree))
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(change.untracked ? Color.green : Color.orange)
                         }.contentShape(Rectangle())
                     }.buttonStyle(.plain).help(change.path + " · " + L10n.get("git.review"))
                     Button {
@@ -184,6 +186,15 @@ struct ProjectGitSidebar: View {
                         .help(L10n.get(scope == .staged ? "git.unstage" : "git.stage"))
                         .accessibilityLabel(L10n.get(scope == .staged ? "git.unstage" : "git.stage") + " " + change.path)
                 }.frame(height: 23)
+                    .contentShape(Rectangle())
+                    .contextMenu {
+                        Button(L10n.get("git.ignore")) {
+                            model.perform { try $0.ignore(change.path) }
+                        }.disabled(model.busy || change.path == ".gitignore")
+                        if !change.untracked {
+                            Text(L10n.get("git.ignoreTrackedHint"))
+                        }
+                    }
             }
         }
     }

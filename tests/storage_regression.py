@@ -320,6 +320,22 @@ expect(accepted == ["new"], "pre-save snapshot is never published")
 delayed.pending[3].resume(returning: "post-save snapshot")
 waitFor("fresh baseline result accepted") { accepted.last == "post-save snapshot" }
 reader.stop()
+
+let mergeFile = project.appendingPathComponent("concurrent.md")
+let mergeBase = "first\nsecond\nthird"
+try DocumentFileStore.create(mergeBase, at: mergeFile)
+manager.openFile(FileSystemItem(url: mergeFile, isDirectory: false))
+manager.setEditState(TabEditState(content: "human\nsecond\nthird", originalContent: mergeBase), for: mergeFile)
+try Data("first\nsecond\nexternal".utf8).write(to: mergeFile)
+expect(manager.saveTab(at: manager.selectedTabIndex, content: "human\nsecond\nthird"), "save rebases independent disk change")
+expect(try! String(contentsOf: mergeFile, encoding: .utf8) == "human\nsecond\nexternal", "saved disk contains both edits")
+expect(manager.getCachedContent(for: mergeFile) == "human\nsecond\nexternal" && !manager.isModified(url: mergeFile), "save updates cache and base to merged text")
+manager.setEditState(TabEditState(content: "human\nunsaved\nexternal", originalContent: "human\nsecond\nexternal"), for: mergeFile)
+manager.receiveDiskContent("human\nsecond\nlatest", for: mergeFile)
+expect(manager.getCachedContent(for: mergeFile) == "human\nunsaved\nlatest", "external refresh merges into dirty draft")
+expect(manager.getEditState(for: mergeFile)?.originalContent == "human\nsecond\nlatest" && manager.isModified(url: mergeFile), "refresh retains unsaved ownership over latest disk base")
+manager.receiveDiskContent("human\ncompeting\nlatest", for: mergeFile)
+expect(manager.diskState(for: mergeFile) == .conflict && manager.getCachedContent(for: mergeFile) == "human\nunsaved\nlatest", "overlap retains draft and marks conflict")
 print("ALL STORAGE REGRESSIONS PASSED")
 
 

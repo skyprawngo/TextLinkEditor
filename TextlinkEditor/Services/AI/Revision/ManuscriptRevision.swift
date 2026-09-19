@@ -51,13 +51,15 @@ struct ManuscriptRevision: Codable, Identifiable {
     }
 
     func applying(proposal: String, selected: Set<Int>, to current: String) throws -> String {
-        guard validRange, current == original else { throw Failure.changed }
+        guard validRange else { throw Failure.changed }
         var lines = target.components(separatedBy: "\n")
         for change in changes(proposal: proposal).reversed() where selected.contains(change.id) {
             let replacement = change.replacementLines
             lines.replaceSubrange(change.oldRange, with: replacement)
         }
-        return (original as NSString).replacingCharacters(in: NSRange(location: selectionLocation, length: selectionLength), with: lines.joined(separator: "\n"))
+        let proposed = (original as NSString).replacingCharacters(in: NSRange(location: selectionLocation, length: selectionLength), with: lines.joined(separator: "\n"))
+        do { return try ManuscriptTextMerge.merge(base: original, current: current, proposed: proposed, allowingProposedDeletions: true) }
+        catch { throw Failure.changed }
     }
 
     enum Failure: LocalizedError {
@@ -95,6 +97,11 @@ enum ManuscriptRevisionBridge {
         guard EditorTabManager.shared.selectedTab?.url.standardizedFileURL == url.standardizedFileURL else {
             throw ManuscriptRevision.Failure.unavailable
         }
+        var composing = false
+        let check: (Bool) -> Void = { composing = composing || $0 }
+        NotificationCenter.default.post(name: Notification.Name("editorWillPerformFileOperation"), object: nil,
+                                        userInfo: ["checkComposition": check])
+        guard !composing else { throw ManuscriptRevision.Failure.changed }
         var failure: Error? = ManuscriptRevision.Failure.unavailable
         let operation: (String, NSRange) -> String? = { current, _ in
             do {

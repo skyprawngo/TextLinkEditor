@@ -9,10 +9,10 @@ final class PreparedManuscript: @unchecked Sendable {
     let styleKey: String
     let typingAttributes: [NSAttributedString.Key: Any]
 
-    private init(text: String, lineStarts: [Int], attributedText: NSAttributedString, styleKey: String,
+    private init(text: String, lineStarts: [Int], attributedText: NSAttributedString?, styleKey: String,
                  typingAttributes: [NSAttributedString.Key: Any]) {
         self.lineStarts = lineStarts
-        self.text = text; self.storage = NSTextStorage(attributedString: attributedText)
+        self.text = text; self.storage = attributedText.map { NSTextStorage(attributedString: $0) }
         self.styleKey = styleKey; self.typingAttributes = typingAttributes
     }
 
@@ -21,11 +21,11 @@ final class PreparedManuscript: @unchecked Sendable {
         return storage
     }
 
-    static func build(text: String, styleKey: String, attributes: [NSAttributedString.Key: Any]) throws -> PreparedManuscript {
+    static func build(text: String, styleKey: String, attributes: [NSAttributedString.Key: Any], buildsStorage: Bool = true) throws -> PreparedManuscript {
         let source = text as NSString
         let result = NSMutableAttributedString(string: "")
         var start = 0
-        while start < source.length {
+        while buildsStorage && start < source.length {
             try Task.checkCancellation()
             let boundary = min(source.length, start + 16_384)
             let end = boundary == source.length ? boundary : NSMaxRange(source.paragraphRange(for: NSRange(location: boundary, length: 0)))
@@ -49,13 +49,13 @@ final class PreparedManuscript: @unchecked Sendable {
             }
             offset = next
         }
-        return PreparedManuscript(text: text, lineStarts: starts, attributedText: result.copy() as! NSAttributedString,
+        return PreparedManuscript(text: text, lineStarts: starts, attributedText: buildsStorage ? result.copy() as? NSAttributedString : nil,
                                   styleKey: styleKey, typingAttributes: attributes)
     }
 
     static func prepare(text: String, fontName: String, fontSize: CGFloat,
                         lineHeightMultiple: CGFloat, letterSpacing: CGFloat,
-                        color: NSColor) async throws -> PreparedManuscript {
+                        color: NSColor, buildsStorage: Bool = true) async throws -> PreparedManuscript {
         let styleKey = "\(fontName)|\(fontSize)|\(lineHeightMultiple)|\(letterSpacing)"
         let worker = Task.detached(priority: .userInitiated) {
             let paragraph = NSMutableParagraphStyle()
@@ -64,7 +64,7 @@ final class PreparedManuscript: @unchecked Sendable {
                 .font: NSFont(name: fontName, size: fontSize) ?? NSFont.systemFont(ofSize: fontSize),
                 .paragraphStyle: paragraph.copy() as! NSParagraphStyle,
                 .kern: letterSpacing, .foregroundColor: color]
-            return try build(text: text, styleKey: styleKey, attributes: attributes)
+            return try build(text: text, styleKey: styleKey, attributes: attributes, buildsStorage: buildsStorage)
         }
         return try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
     }

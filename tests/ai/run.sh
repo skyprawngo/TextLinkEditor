@@ -9,6 +9,7 @@ xcrun swiftc -parse-as-library \
   TextlinkEditor/Services/AI/Models/AIConnectionState.swift \
   TextlinkEditor/Services/AI/CLI/CLIDetector.swift \
   TextlinkEditor/Services/AI/Auth/ChatGPTAccountService.swift \
+  TextlinkEditor/Services/AI/CLI/CodexRPCConnection.swift \
   TextlinkEditor/Services/AI/CLI/CLIProcessManager.swift \
   TextlinkEditor/Services/AI/CLI/CLIJSONStream.swift \
   TextlinkEditor/Services/AI/CLI/CodexContextMeter.swift \
@@ -23,9 +24,11 @@ xcrun swiftc -parse-as-library \
   TextlinkEditor/Services/Writing/WritingWorkspaceStore.swift \
   TextlinkEditor/Services/Versions/VersionHistoryStore.swift \
   TextlinkEditor/Services/FileSystem/DocumentFileStore.swift \
+  TextlinkEditor/Services/FileSystem/Workspace/DocumentReconciliation.swift \
   TextlinkEditor/Services/FileSystem/Workspace/WorkspaceFileEvents.swift \
   TextlinkEditor/Views/MainEditor/AIAssistant/AIAssistantViewModel.swift \
   tests/ai/HistoryRepositoryRegression.swift \
   tests/ai/CollaborationRegression.swift \
+  tests/ai/QueueRegression.swift \
   tests/ai/Regression.swift -o "$task_dir/regression"
 "$task_dir/regression" "$@"

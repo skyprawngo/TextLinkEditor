@@ -23,9 +23,10 @@ final class NativeManuscriptRuler: NSRulerView {
         let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.secondaryLabelColor]
         for (row, fragment) in view.visibleManuscriptLines() {
             let point = convert(NSPoint(x: 0, y: fragment.minY + view.textContainerOrigin.y), from: view)
-            let label = "\(row + 1)" as NSString
+            let documentRow = row + (view.windowedDocument?.firstRow ?? 0)
+            let label = "\(documentRow + 1)" as NSString
             label.draw(at: NSPoint(x: ruleThickness - label.size(withAttributes: attributes).width - 8, y: point.y + max(0, (fragment.height - label.size(withAttributes: attributes).height) / 2)), withAttributes: attributes)
-            if view.modifiedLines.contains(row) {
+            if view.modifiedLines.contains(documentRow) {
                 NSColor.systemOrange.setFill()
                 NSRect(x: 2, y: point.y, width: 3, height: max(12, fragment.height)).fill()
             }

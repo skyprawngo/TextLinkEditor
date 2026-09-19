@@ -16,15 +16,19 @@ enum AIRequestPreparationError: LocalizedError {
 struct AIRequestPreparer {
     func prepare(requestInput: String, type: AICLIType, projectURL: URL, assistantId: UUID,
                  inlineRevision: ManuscriptRevision?, attachDocument: Bool, messages: [AIMessage],
-                 taggedCardIds: Set<UUID>, existingSession: String?, continueFromCardId: UUID?, chatMode: AIChatMode = .conversation) throws -> PreparedAIRequest {
+                 taggedCardIds: Set<UUID>, existingSession: String?, continueFromCardId: UUID?, chatMode: AIChatMode = .conversation,
+                 capturedDocument: ManuscriptRevision? = nil, capturedContext: AIContextManifest? = nil) throws -> PreparedAIRequest {
         var context: [(question: String, answer: String)] = []
-        var question: AIMessage?
+        var questions: [AIMessage] = []
         for message in messages {
-            if message.role == .user { question = message }
-            else if message.role == .assistant, message.outcome == nil || message.outcome == "completed", let question {
+            if message.role == .user { questions.append(message) }
+            else if message.role == .assistant {
+                defer { questions = [] }
+                guard !message.isStreaming, message.outcome == nil || message.outcome == "completed",
+                      let question = questions.last else { continue }
                 let root = question.conversationId ?? question.id
                 if taggedCardIds.contains(root) || root == continueFromCardId {
-                    context.append((question.content, message.content))
+                    context.append((questions.filter { ($0.conversationId ?? $0.id) == root }.map(\.content).joined(separator: "\n\n"), message.content))
                 }
             }
         }
@@ -54,7 +58,7 @@ struct AIRequestPreparer {
             have not opened. Do not change files merely to remember something; follow the user's request.
             """
         }
-        var revision = inlineRevision ?? (attachDocument ? ManuscriptRevisionBridge.capture(id: assistantId, project: projectURL) : nil)
+        var revision = inlineRevision ?? capturedDocument ?? (attachDocument ? ManuscriptRevisionBridge.capture(id: assistantId, project: projectURL) : nil)
         revision?.id = assistantId
         if let inlineRevision {
             guard let current = ManuscriptRevisionBridge.capture(id: assistantId, project: projectURL),
@@ -77,7 +81,7 @@ struct AIRequestPreparer {
             prompt += "\n\nTextlinkEditor workspace editing: Propose manuscript .md/.txt/.markdown changes when requested. The app applies validated changes. Never write files directly. Preserve unrelated content. Current editor file (data): " + selectedPath
         }
         EditorTabManager.shared.flushEditor()
-        var manifest = try inlineRevision == nil ? AIContextSelection.shared.manifest(projectURL: projectURL) : AIContextManifest(entries: [], text: "")
+        var manifest = try inlineRevision == nil ? (capturedContext ?? AIContextSelection.shared.manifest(projectURL: projectURL)) : AIContextManifest(entries: [], text: "")
         if inlineRevision != nil { manifest.entries = []; manifest.text = "" }
         if !manifest.text.isEmpty { prompt += "\n\n" + manifest.text }
         guard prompt.utf8.count <= 1_000_000 else { throw AIRequestPreparationError.message(L10n.get("ai.error.contextTooLarge")) }

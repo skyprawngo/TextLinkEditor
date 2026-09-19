@@ -39,6 +39,7 @@ final class EditorScrollCoordinator {
         guard let editor, let scroll = editor.enclosingScrollView else { return nil }
         switch policy {
         case .followCursor:
+            if editor.windowedDocument?.hasVirtualSelection == true { return capture(.preserveViewport) }
             let offset = editor.selectedRange().location
             if let pending, pending.offset == offset { return pending }
             if let anchor = visibleCursorAnchor() { return anchor }
@@ -52,14 +53,18 @@ final class EditorScrollCoordinator {
             if let pending { return pending }
             let point = NSPoint(x: editor.textContainerOrigin.x + (editor.textContainer?.lineFragmentPadding ?? 0),
                                y: scroll.contentView.bounds.minY + 1)
-            let offset = min(editor.characterIndexForInsertion(at: point), editor.textStorage?.length ?? 0)
+            // TextKit hit testing above the first text line can return the last
+            // insertion position. Padding/top bounce must stay at the window's
+            // start, otherwise prefetch mistakes an upward gesture for its tail.
+            let offset = point.y <= editor.textContainerOrigin.y ? 0
+                : min(editor.characterIndexForInsertion(at: point), editor.textStorage?.length ?? 0)
             guard let rect = editor.lineRect(at: offset) else { return nil }
             return Anchor(offset: offset, screenY: rect.minY + editor.textContainerOrigin.y - scroll.contentView.bounds.minY)
         }
     }
 
     private func visibleCursorAnchor() -> Anchor? {
-        guard let editor, let scroll = editor.enclosingScrollView,
+        guard let editor, editor.windowedDocument?.hasVirtualSelection != true, let scroll = editor.enclosingScrollView,
               let manager = editor.textLayoutManager,
               let location = editor.textLocation(at: editor.selectedRange().location),
               let viewport = manager.textViewportLayoutController.viewportRange,
@@ -83,6 +88,10 @@ final class EditorScrollCoordinator {
         scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX,
             y: max(0, y + editor.textContainerOrigin.y - anchor.screenY)))
         controller.layoutViewport()
+        // Relocation is an estimate. A partially clipped anchor can fall outside
+        // TextKit's new viewport, so explicitly lay out its paragraph before the
+        // final measurement. Never accept the estimate as a persistent position.
+        manager.ensureLayout(for: NSTextRange(location: location))
         if let rect = editor.lineRect(at: anchor.offset) {
             scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX,
                 y: max(0, rect.minY + editor.textContainerOrigin.y - anchor.screenY)))

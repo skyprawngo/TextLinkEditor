@@ -285,6 +285,31 @@ func checkCollaboration(in folder: URL) async throws {
     try FileManager.default.createDirectory(at: subfolder, withIntermediateDirectories: true)
     do { _ = try CollaborationGit.staged(project: subfolder); preconditionFailure("parent repo accepted") } catch {}
     check(true, "Git root mismatch rejected")
+
+    let mergeRoot = folder.appendingPathComponent("merge project")
+    try FileManager.default.createDirectory(at: mergeRoot, withIntermediateDirectories: true)
+    let mergeStore = CollaborationStore(project: mergeRoot)
+    let mergeFile = mergeRoot.appendingPathComponent("draft.md")
+    try Data("first\nsecond\nthird".utf8).write(to: mergeFile)
+    try mergeStore.enable()
+    let mergeTask = try mergeStore.enqueue(origin: "comment", instruction: "edit second")
+    let mergeEdit = CollaborationEdit(path: "draft.md", content: nil, reason: "requested", evidence: [.init(path: "draft.md", quote: "second")], dependsOn: [], replacements: [.init(oldText: "second", newText: "AI")])
+    let mergeFixture = ProposalFixture(.init(summary: "merged", edits: [mergeEdit], questions: [], facts: []))
+    mergeFixture.beforeReturn = {
+        try Data("prefix\nfirst\nsecond\nhuman".utf8).write(to: mergeFile)
+        try Data("unrelated".utf8).write(to: mergeRoot.appendingPathComponent("other.md"))
+    }
+    _ = try await CollaborationEngine(store: mergeStore, executor: mergeFixture).execute(taskID: mergeTask, provider: .claude, options: .init())
+    check(try String(contentsOf: mergeFile, encoding: .utf8) == "prefix\nfirst\nAI\nhuman", "exact-text proposal merges concurrent typing and shifted positions")
+    let mergedJournal = try mergeStore.journals().first { $0.taskID == mergeTask }!
+    check(mergedJournal.changes.first?.before == "prefix\nfirst\nsecond\nhuman", "journal captures actual human version")
+    try Data("prefix\nfirst\nAI\nhuman\nlater".utf8).write(to: mergeFile)
+    try CollaborationApplier(store: mergeStore).undo(taskID: mergeTask)
+    check(try String(contentsOf: mergeFile, encoding: .utf8) == "prefix\nfirst\nsecond\nhuman\nlater", "undo preserves concurrent and later independent human changes")
+    check(try String(contentsOf: mergeRoot.appendingPathComponent("other.md"), encoding: .utf8) == "unrelated", "unrelated new document does not block AI")
+    do { _ = try mergeEdit.resolvedContent(base: "second second"); preconditionFailure("ambiguous old text accepted") } catch {}
+    do { _ = try mergeEdit.resolvedContent(base: "missing"); preconditionFailure("missing old text accepted") } catch {}
+    check(mergeFixture.capturedPrompt.contains("oldText") && mergeFixture.capturedPrompt.contains("not line numbers"), "provider contract requests exact text patches")
     let renamed = folder.appendingPathComponent("renamed project")
     try FileManager.default.moveItem(at: root, to: renamed)
     check(try CollaborationStore(project: renamed).load().tasks.count == storeCountAtRename(renamed), "project rename retains original collaboration metadata")

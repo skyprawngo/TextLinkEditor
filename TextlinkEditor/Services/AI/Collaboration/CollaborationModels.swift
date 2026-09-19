@@ -49,6 +49,37 @@ struct CollaborationEdit: Codable {
     var reason: String
     var evidence: [CollaborationEvidence]
     var dependsOn: [String]
+    var replacements: [TextReplacement]? = nil
+
+    struct TextReplacement: Codable {
+        var oldText: String
+        var newText: String
+    }
+
+    func resolvedContent(base: String?) throws -> String? {
+        guard let replacements else { return content } // Older saved/provider proposals.
+        guard content == nil, let base, !replacements.isEmpty else { throw CollaborationFailure.invalidResponse }
+        let source = base as NSString
+        var patches: [(NSRange, String)] = []
+        for replacement in replacements {
+            guard !replacement.oldText.isEmpty else { throw CollaborationFailure.invalidResponse }
+            let range = source.range(of: replacement.oldText, options: .literal)
+            guard range.location != NSNotFound else { throw CollaborationFailure.invalidResponse }
+            // Include enough surrounding text to identify a repeated passage uniquely.
+            let next = range.location + 1
+            guard source.range(of: replacement.oldText, options: .literal,
+                               range: NSRange(location: next, length: source.length - next)).location == NSNotFound,
+                  !patches.contains(where: { NSIntersectionRange($0.0, range).length > 0 }) else {
+                throw CollaborationFailure.invalidResponse
+            }
+            patches.append((range, replacement.newText))
+        }
+        let result = NSMutableString(string: base)
+        for (range, replacement) in patches.sorted(by: { $0.0.location > $1.0.location }) {
+            result.replaceCharacters(in: range, with: replacement)
+        }
+        return result as String
+    }
 }
 
 struct CollaborationFact: Codable, Identifiable {

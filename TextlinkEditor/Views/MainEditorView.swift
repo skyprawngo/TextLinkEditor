@@ -188,8 +188,8 @@ struct MainEditorView: View {
             guard let native = notification.object as? NativeManuscriptTextView,
                   native.window != nil, let project = projectManager.currentProject?.path else { return }
             if native.inlinePanel != nil { return }
-            let source = native.string as NSString
-            let selected = native.selectedRange()
+            let source = native.documentText as NSString
+            let selected = native.documentSelection
             let selectedText = source.substring(with: selected)
             let range = selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? NSRange(location: selected.location, length: 0) : selected
@@ -197,7 +197,7 @@ struct MainEditorView: View {
             let root = project.resolvingSymlinksInPath().standardizedFileURL.path + "/"
             let path = tab.url.resolvingSymlinksInPath().standardizedFileURL.path
             guard path.hasPrefix(root) else { return }
-            let revision = ManuscriptRevision(id: UUID(), relativePath: String(path.dropFirst(root.count)), original: native.string,
+            let revision = ManuscriptRevision(id: UUID(), relativePath: String(path.dropFirst(root.count)), original: native.documentText,
                 selectionLocation: range.location, selectionLength: range.length)
             let panel = NSHostingView(rootView: InlineAIChatView(projectURL: project, revision: revision, onClose: { [weak native] in
                 guard let native, native.inlinePanel != nil else { return }

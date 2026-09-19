@@ -6,6 +6,7 @@ import AppKit
 final class ManuscriptPresentationCoordinator {
     private weak var editor: NativeManuscriptTextView?
     private var applying = false
+    var isApplying: Bool { applying }
 
     init(editor: NativeManuscriptTextView) { self.editor = editor }
 

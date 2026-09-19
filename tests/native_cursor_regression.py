@@ -191,6 +191,10 @@ print("PASS repeated formatting toggles preserve line 116 at 60 percent of viewp
 
 '''
 
+import sys
+if '--windowed' in sys.argv:
+    harness = harness.replace('view.load(', 'view.loadDocument(')
+
 with tempfile.TemporaryDirectory(prefix='textlink-scroll-test-') as directory:
     directory = Path(directory)
     main = directory / 'main.swift'

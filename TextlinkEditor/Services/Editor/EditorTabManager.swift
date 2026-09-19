@@ -225,22 +225,22 @@ final class EditorTabManager: WorkspaceDocumentParticipant {
                 receiveDiskContent(disk, for: url)
                 return true
             }
-            guard decision != .conflict else {
-                setDiskState(.conflict, for: url)
-                throw DocumentFileStore.Failure.conflict
-            }
+            let merged: String
+            do { merged = try ManuscriptTextMerge.merge(base: state.originalContent, current: disk, proposed: content) }
+            catch { throw DocumentFileStore.Failure.conflict }
             if let project = sessionProjectURL, content != state.originalContent,
                url.standardizedFileURL.path.hasPrefix(project.standardizedFileURL.path + "/") {
-                _ = try VersionHistoryStore.snapshot(projectURL: project, documentURL: url, content: state.originalContent, reason: "versions.beforeSave")
+                _ = try VersionHistoryStore.snapshot(projectURL: project, documentURL: url, content: disk, reason: "versions.beforeSave")
             }
-            try files.documents.save(content, at: url, expected: state.originalContent)
-            editStates[url]?.content = content
+            try files.documents.save(merged, at: url, expected: disk)
+            editStates[url]?.content = merged
             editStates[url]?.markAsSaved()
             setDiskState(.current, for: url)
             tabs[index].isModified = false
             tabs[index].justSaved = true
             saveErrors[url] = nil
             lastSavedAt[url] = Date()
+            if merged != content { files.events.publish(.init(url: url, change: .documentContentAccepted)) }
             autoSaveSessionIfNeeded()
             let id = tabs[index].id
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
@@ -472,9 +472,12 @@ final class EditorTabManager: WorkspaceDocumentParticipant {
         guard !composing else { throw NSError(domain: "AIWorkspaceEdit", code: 1, userInfo: [NSLocalizedDescriptionKey: L10n.get("storage.conflict")]) }
         flushEditor()
         let root = project.resolvingSymlinksInPath().standardizedFileURL.path + "/"
-        guard !tabs.contains(where: {
-            $0.url.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(root) && isModified(url: $0.url)
-        }) else { throw NSError(domain: "AIWorkspaceEdit", code: 1, userInfo: [NSLocalizedDescriptionKey: L10n.get("storage.conflict")]) }
+        for (index, tab) in tabs.enumerated() where tab.url.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(root) {
+            guard isModified(url: tab.url) else { continue }
+            guard let content = getCachedContent(for: tab.url), saveTab(at: index, content: content) else {
+                throw NSError(domain: "AIWorkspaceEdit", code: 1, userInfo: [NSLocalizedDescriptionKey: L10n.get("storage.conflict")])
+            }
+        }
     }
 
     func collaborationDrafts(project: URL) -> [String: String] {
@@ -786,7 +789,21 @@ final class EditorTabManager: WorkspaceDocumentParticipant {
     func receiveDiskContent(_ disk: String, for url: URL) {
         let url = ownedURL(url)
         guard let old = editStates[url], findTab(with: url) != nil else { return }
-        if disk != old.originalContent, selectedTab?.url == url { flushEditor() }
+        if disk != old.originalContent, selectedTab?.url == url {
+            var composing = false
+            let check: (Bool) -> Void = { composing = composing || $0 }
+            NotificationCenter.default.post(name: .editorWillPerformFileOperation, object: nil,
+                                           userInfo: ["checkComposition": check])
+            if composing {
+                // Read a fresh version after composition; never replay this stale snapshot.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                    guard let self, self.findTab(with: url) != nil else { return }
+                    self.observation.requestRead(url)
+                }
+                return
+            }
+            flushEditor()
+        }
         guard var state = editStates[url], findTab(with: url) != nil else { return }
         let decision = DocumentReconciliation.decide(base: state.originalContent, draft: state.content, disk: disk)
         if decision == .unchanged {
@@ -794,15 +811,17 @@ final class EditorTabManager: WorkspaceDocumentParticipant {
             saveErrors[url] = nil
             return
         }
-        if decision == .conflict {
+        let merged: String
+        do { merged = try ManuscriptTextMerge.merge(base: state.originalContent, current: state.content, proposed: disk) }
+        catch {
             setDiskState(.conflict, for: url)
             return
         }
-        let contentChanged = state.content != disk
-        state.content = disk
+        let contentChanged = state.content != merged
+        state.content = merged
         state.originalContent = disk
         editStates[url] = state
-        if let index = findTab(with: url) { tabs[index].isModified = false }
+        if let index = findTab(with: url) { tabs[index].isModified = merged != disk }
         setDiskState(.current, for: url)
         saveErrors[url] = nil
         if contentChanged {

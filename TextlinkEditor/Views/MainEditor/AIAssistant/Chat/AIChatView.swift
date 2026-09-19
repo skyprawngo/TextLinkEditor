@@ -21,6 +21,14 @@ struct AIChatView: View {
     @Binding var selectedCardId: UUID?
     let isProcessing: Bool
     let onSend: (UUID?) -> Void
+    var onImmediateSend: () -> Void = {}
+    var queuedMessages: [AIQueuedMessage] = []
+    var steeringMessageID: UUID?
+    var onQueueRemove: (UUID) -> Void = { _ in }
+    var onQueueRecover: (UUID) -> Void = { _ in }
+    var onQueueSteer: (UUID) -> Void = { _ in }
+    var onQueueMove: (UUID, UUID) -> Void = { _, _ in }
+    var onQueueResume: () -> Void = {}
     let onCancel: () -> Void
     let onClearHistory: () -> Void
     let onDeleteCard: ((UUID) -> Void)?
@@ -98,8 +106,14 @@ struct AIChatView: View {
                             } else { revisionError = true }
                         }).equatable()
                     if !isInlineRecord {
-                        composer
-                            .zIndex(1)
+                        VStack(spacing: 0) {
+                            AIMessageQueueView(messages: queuedMessages, isProcessing: isProcessing,
+                                steeringMessageID: steeringMessageID, onRemove: onQueueRemove,
+                                onRecover: { id in onQueueRecover(id); inputFocusRequest += 1 },
+                                onSteer: onQueueSteer, onMove: onQueueMove, onResume: onQueueResume)
+                            composer
+                        }
+                        .zIndex(1)
                     }
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height)
@@ -154,7 +168,6 @@ struct AIChatView: View {
                         .background(.quaternary, in: Capsule())
                 }
                 .buttonStyle(.plain)
-                .disabled(isProcessing)
                 .help(L10n.get("ai.mode.removeTag"))
                 .accessibilityLabel(mode.command + " · " + L10n.get("ai.mode.removeTag"))
             }
@@ -163,14 +176,15 @@ struct AIChatView: View {
             } else {
                 MultiLineInputView(text: $inputText, contentHeight: $inputHeight,
                     placeholder: L10n.get(selectedCardId == nil ? "ai.chat.inputPlaceholder" : "ai.chat.continueConversation"),
-                    isDisabled: isProcessing, minHeight: 48, maxHeight: 160,
+                    isDisabled: false, minHeight: 48, maxHeight: 160,
                     onSubmit: { onSend(selectedCardId) },
+                    onImmediateSubmit: onImmediateSend,
                     onModeSelected: { mode in modelSettings.chatMode = mode },
-                    focusRequest: inputFocusRequest)
+                    focusRequest: inputFocusRequest, composerID: modelSettings.composerID)
                     .frame(height: inputHeight)
                     // An anchored in-window popover never becomes a key window or steals the caret.
                     .overlay(alignment: .bottomLeading) {
-                        if !isProcessing && AIChatMode.completionRange(inputText) != nil && dismissedCommandDraft != inputText {
+                        if AIChatMode.completionRange(inputText) != nil && dismissedCommandDraft != inputText {
                             commandPopover
                                 .padding(.bottom, inputHeight + 8)
                         }
@@ -192,11 +206,12 @@ struct AIChatView: View {
                     contextUsageButton
                     if isProcessing {
                         iconButton("ai.workspace.stop", "stop.circle.fill", action: onCancel)
-                    } else {
-                        iconButton("ai.chat.send", "arrow.up.circle.fill") { onSend(selectedCardId) }
-                            .foregroundStyle(Color.accentColor)
-                            .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        iconButton("ai.queue.steer", "arrow.turn.down.right", action: onImmediateSend)
+                            .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || steeringMessageID != nil)
                     }
+                    iconButton(isProcessing ? "ai.queue.enqueue" : "ai.chat.send", "arrow.up.circle.fill") { onSend(selectedCardId) }
+                        .foregroundStyle(Color.accentColor)
+                        .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }

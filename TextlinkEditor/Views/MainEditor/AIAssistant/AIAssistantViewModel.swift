@@ -14,7 +14,14 @@ final class AIAssistantViewModel {
     var selectedCLIType: AICLIType?
     var installStatus: CLIInstallationStatus = .unknown
     var messages: [AIMessage] = []
-    var inputText = ""
+    var inputText = "" {
+        didSet {
+            guard inputText != oldValue else { return }
+            draftRevision &+= 1
+            drafts.save(inputText, project: projectFolderURL, conversation: selectedCardId)
+        }
+    }
+    private var draftRevision = 0
     private var modeOverrides: [UUID: AIChatMode] = [:]
     private var newChatMode: AIChatMode?
     var chatMode: AIChatMode {
@@ -36,10 +43,34 @@ final class AIAssistantViewModel {
         else { newChatMode = nil }
     }
     var isProcessing = false
+    private let submissions = AIChatSubmissionQueue()
+    var queuedMessages: [AIQueuedMessage] { submissions.messages }
+    var steeringMessageID: UUID? { submissions.steeringMessageID }
+    private var activeChat: AIActiveChatRequest?
+    private var recoveredDraft: AIQueuedMessage?
+
     var taggedCardIds: Set<UUID> = []
     var selectionState: CLISelectionState = .empty
     var showingHistory = false
-    var selectedCardId: UUID?
+    var selectedCardId: UUID? {
+        didSet {
+            guard selectedCardId != oldValue else { return }
+            draftRevision &+= 1 // A late response must not consume another chat's draft.
+            recoveredDraft = nil
+            inputText = drafts.text(project: projectFolderURL, conversation: selectedCardId)
+        }
+    }
+    var composerID: String { (projectFolderURL?.absoluteString ?? "") + "/" + (selectedCardId?.uuidString ?? "new") }
+    var chatInputBinding: Binding<String> {
+        let project = projectFolderURL, conversation = selectedCardId
+        return Binding(get: {
+            self.projectFolderURL == project && self.selectedCardId == conversation
+                ? self.inputText : self.drafts.text(project: project, conversation: conversation)
+        }, set: { value in
+            guard self.projectFolderURL == project, self.selectedCardId == conversation else { return }
+            self.inputText = value
+        })
+    }
     var includeCurrentDocument = false
     var errorMessage: String?
     var inlineErrorMessage: String?
@@ -48,6 +79,7 @@ final class AIAssistantViewModel {
     private var cardSessionIds: [UUID: String] = [:]
     private let processManager: any AIRequestExecuting
     private let history: any AIHistoryRepository
+    private let drafts: AIChatDraftStore
     private var requestTask: Task<Void, Never>?
     private var setupTask: Task<Void, Never>?
     private var requestId: UUID?
@@ -103,6 +135,7 @@ final class AIAssistantViewModel {
          executor: (any AIRequestExecuting)? = nil) {
         modelPreferences = AIModelPreferences(modelDefaults: modelDefaults)
         self.history = history
+        self.drafts = AIChatDraftStore(defaults: modelDefaults)
         self.processManager = executor ?? CLIProcessManager()
         loadSavedState()
         collaboration.runtime = { [weak self] in
@@ -129,12 +162,14 @@ final class AIAssistantViewModel {
     func setProject(_ url: URL?) {
         guard url != projectFolderURL else { return }
         cancelSend()
+        submissions.clear()
+        recoveredDraft = nil
         projectFolderURL = url
         messages = []
         taggedCardIds = []
         cardSessionIds = [:]
         selectedCardId = nil
-        inputText = ""
+        inputText = drafts.text(project: url, conversation: nil)
         modeOverrides = [:]
         newChatMode = nil
         includeCurrentDocument = false
@@ -171,9 +206,9 @@ final class AIAssistantViewModel {
     }
 
     func prepareDraftAction(_ instruction: String) {
+        selectedCardId = nil
         inputText = "/작성 " + instruction
         includeCurrentDocument = true
-        selectedCardId = nil
     }
 
     func generateCommitMessage(patch: String) async throws -> String {
@@ -188,7 +223,7 @@ final class AIAssistantViewModel {
         requestId = owner
         isProcessing = true
         defer {
-            if requestId == owner { requestId = nil; isProcessing = false }
+            if requestId == owner { requestId = nil; isProcessing = false; drainQueue() }
         }
         var options = requestOptions(for: provider, category: .commitMessage)
         options.readsProjectFiles = false
@@ -235,6 +270,7 @@ final class AIAssistantViewModel {
 
     func completeConnection(_ type: AICLIType) {
         cancelSend()
+        submissions.clear()
         UserSettings.shared.aiAssistantEnabled = true
         UserSettings.shared.aiAssistantCLIType = type.rawValue
         selectedCLIType = type
@@ -274,68 +310,78 @@ final class AIAssistantViewModel {
         return AIDocumentSnapshot(name: tab.title, content: content)
     }
 
-    func sendMessage(continueFromCardId: UUID? = nil, inlineInput: String? = nil, inlineRevision: ManuscriptRevision? = nil) {
+    @discardableResult
+    func sendMessage(continueFromCardId: UUID? = nil, inlineInput: String? = nil, inlineRevision: ManuscriptRevision? = nil,
+                     queued: AIQueuedMessage? = nil) -> Bool {
+        if queued == nil && inlineInput == nil && (isProcessing || !queuedMessages.isEmpty || recoveredDraft != nil) {
+            enqueueMessage(conversationID: continueFromCardId)
+            return false
+        }
         func reportPreparationError(_ message: String) {
             if inlineRevision != nil { inlineErrorMessage = message }
             else { errorMessage = message }
         }
-        var requestInput = inlineInput ?? inputText
+        var requestInput = queued?.text ?? inlineInput ?? inputText
         let originalInput = requestInput
-        guard !isProcessing, !collaboration.isWorking else { return }
-        if inlineInput == nil, let command = AIChatMode.parse(requestInput) {
+        guard !isProcessing, !collaboration.isWorking else { return false }
+        if queued == nil, inlineInput == nil, let command = AIChatMode.parse(requestInput) {
             chatMode = command.mode
             requestInput = command.body
-            if requestInput.isEmpty { inputText = ""; return }
+            if requestInput.isEmpty { inputText = ""; return false }
         }
-        let attachDocument = inlineInput == nil && includeCurrentDocument
+        let attachDocument = queued.map { $0.document != nil } ?? (inlineInput == nil && includeCurrentDocument)
         guard !isProcessing, !collaboration.isWorking, !requestInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              case .connected(let type) = connectionState else { return }
-        if type == .chatgpt && chatGPTAccount.account == nil { connectionState = .ready(type); return }
-        guard let projectURL = projectFolderURL else { reportPreparationError(L10n.get("ai.error.noProject")); return }
+              case .connected(let type) = connectionState else { return false }
+        if type == .chatgpt && chatGPTAccount.account == nil { connectionState = .ready(type); return false }
+        guard let projectURL = projectFolderURL else { reportPreparationError(L10n.get("ai.error.noProject")); return false }
         guard !UserSettings.shared.aiTerminalMode else {
             reportPreparationError(CLIProcessManager.CLIError.terminalUnavailable.localizedDescription)
-            return
+            return false
         }
-        guard !historyLoadFailed else { reportPreparationError(L10n.get("ai.error.historyLoadFailed")); return }
+        guard !historyLoadFailed else { reportPreparationError(L10n.get("ai.error.historyLoadFailed")); return false }
         if inlineRevision != nil { inlineErrorMessage = nil }
         else { errorMessage = nil }
         let id = UUID()
-        let userId = UUID()
-        let continuedConversation = continueFromCardId ?? (inlineInput == nil ? selectedCardId : nil)
+        let userId = queued?.id ?? UUID()
+        let continuedConversation = queued?.conversationID ?? continueFromCardId ?? (inlineInput == nil ? selectedCardId : nil)
         let conversationId = inlineRevision == nil ? (continuedConversation ?? userId) : userId
         let assistantId = UUID()
         var requestPersisted = false
         defer { if !requestPersisted { removeRequestArtifacts(ids: [assistantId]) } }
         let category: AIConversationCategory = inlineRevision == nil ? .chat : .inlineEdit
-        if let savedModel = modelSelections[modelPreferences.preferenceKey(type, category)], !savedModel.isEmpty,
-           selectedModel(for: type, category: category) == nil {
+        if let savedModel = queued?.options.model ?? modelSelections[modelPreferences.preferenceKey(type, category)], !savedModel.isEmpty,
+           !models(for: type).contains(where: { $0.id == savedModel }) {
             reportPreparationError(L10n.get("ai.model.retry"))
-            return
+            return false
         }
-        var options = requestOptions(for: type, category: category)
+        var options = queued?.options ?? requestOptions(for: type, category: category)
         options.readsProjectFiles = inlineRevision == nil
-        let mode = chatMode
+        options.allowsSteering = inlineInput == nil && inlineRevision == nil
+        let mode = queued?.mode ?? chatMode
         let existingSession = inlineRevision == nil ? resumableSession(for: conversationId, provider: type) : nil
         let prepared: PreparedAIRequest
         do {
             prepared = try AIRequestPreparer().prepare(requestInput: requestInput, type: type,
                 projectURL: projectURL, assistantId: assistantId, inlineRevision: inlineRevision,
-                attachDocument: attachDocument, messages: messages, taggedCardIds: taggedCardIds,
-                existingSession: existingSession, continueFromCardId: continuedConversation, chatMode: mode)
-        } catch { reportPreparationError(error.localizedDescription); return }
+                attachDocument: attachDocument, messages: messages, taggedCardIds: queued?.taggedIDs ?? taggedCardIds,
+                existingSession: existingSession, continueFromCardId: continuedConversation, chatMode: mode,
+                capturedDocument: queued?.document, capturedContext: queued?.context)
+        } catch { reportPreparationError(error.localizedDescription); return false }
         messages.append(AIMessage(id: userId, role: .user, content: requestInput, conversationId: conversationId, kind: category.rawValue, provider: type.rawValue, model: options.model, reasoningEffort: options.effort, chatMode: inlineRevision == nil ? mode.rawValue : nil))
         messages.append(AIMessage(id: assistantId, role: .assistant, content: "", isStreaming: true, conversationId: conversationId, kind: category.rawValue, provider: type.rawValue, model: options.model, reasoningEffort: options.effort))
-        guard persist() else { messages.removeLast(2); return }
+        guard persist() else { messages.removeLast(2); return false }
         requestPersisted = true
-        if inlineInput == nil {
+        if inlineInput == nil && queued == nil {
             inputText = ""
             if let selectedCardId { modeOverrides.removeValue(forKey: selectedCardId) }
             selectedCardId = conversationId
             modeOverrides.removeValue(forKey: conversationId)
             newChatMode = nil
         }
+        let submittedDraftRevision = draftRevision
         isProcessing = true
         requestId = id
+        if inlineInput == nil { activeChat = AIActiveChatRequest(request: id, assistant: assistantId, conversation: conversationId, provider: type) }
         requestTask = Task { [weak self] in
             guard let self else { return }
             let executor = AIWorkspaceProposalExecutor(base: processManager, requestID: assistantId, project: projectURL)
@@ -373,13 +419,14 @@ final class AIAssistantViewModel {
                 // Never replace the unrelated sidebar conversation's error or draft.
                 if inlineRevision == nil { errorMessage = error.localizedDescription }
                 // Keep the prompt available for editing/retry without dropping its persisted failed turn.
-                if inlineInput == nil { inputText = originalInput }
+                if inlineInput == nil && queued == nil && selectedCardId == conversationId && inputText.isEmpty && draftRevision == submittedDraftRevision { inputText = originalInput }
                 let response = receivedResponse ?? messages.first(where: { $0.id == assistantId })?.content ?? ""
                 let failureRecord = inlineRevision != nil && !response.isEmpty
                     ? error.localizedDescription + "\n\n" + response : error.localizedDescription
                 finish(assistantId, content: failureRecord, outcome: "failed")
             }
         }
+        return true
     }
 
     private func finish(_ messageId: UUID, content: String, outcome: String, usage: AIContextUsage? = nil) {
@@ -390,11 +437,16 @@ final class AIAssistantViewModel {
         requestId = nil
         requestTask = nil
         isProcessing = false
-        _ = persist()
+        activeChat = nil
+        let saved = persist()
+        submissions.didFinishResponse(successfully: outcome == "completed" && saved)
+        drainQueue()
     }
 
     func cancelSend() {
         collaboration.cancel()
+        submissions.cancel()
+        activeChat = nil
         requestId = nil // invalidate callbacks before touching process/UI state
         requestTask?.cancel()
         processManager.cancel()
@@ -420,13 +472,16 @@ final class AIAssistantViewModel {
     }
     func clearHistory() {
         cancelSend()
+        submissions.clear()
         let previous = messages
         let tags = taggedCardIds
         let sessions = cardSessionIds
         messages = []; taggedCardIds = []; cardSessionIds = [:]
         if !persist() { messages = previous; taggedCardIds = tags; cardSessionIds = sessions }
         else {
+            drafts.clear(project: projectFolderURL)
             selectedCardId = nil
+            inputText = ""
             do {
                 let ids = try projectFolderURL.map { try AIContextSelection.shared.savedRequestIDs(projectURL: $0) } ?? []
                 removeRequestArtifacts(ids: ids.union(previous.map(\.id)))
@@ -436,6 +491,7 @@ final class AIAssistantViewModel {
     func saveTaggedCards() { _ = persist() }
     func deleteCard(id: UUID) {
         cancelSend()
+        submissions.removeConversation(id)
         let previous = messages
         let tags = taggedCardIds
         let sessions = cardSessionIds
@@ -449,6 +505,7 @@ final class AIAssistantViewModel {
         taggedCardIds.remove(id); cardSessionIds.removeValue(forKey: id)
         if !persist() { messages = previous; taggedCardIds = tags; cardSessionIds = sessions }
         else {
+            drafts.save("", project: projectFolderURL, conversation: id)
             if selectedCardId == id { selectedCardId = nil }
             let retained = Set(messages.map(\.id))
             removeRequestArtifacts(previous.filter { !retained.contains($0.id) })
@@ -469,4 +526,125 @@ final class AIAssistantViewModel {
         if !failures.isEmpty { errorMessage = failures.joined(separator: "\n") }
     }
     func sendSelectionResponse(_ optionId: Int) { /* interactive mode is no longer supported */ }
+}
+
+// MARK: - Sidebar submissions
+extension AIAssistantViewModel {
+    private func captureDraft(conversationID: UUID? = nil) throws -> AIQueuedMessage? {
+        guard let project = projectFolderURL, case .connected(let provider) = connectionState,
+              !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let command = AIChatMode.parse(inputText)
+        let body = command?.body ?? inputText
+        guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            if let command { chatMode = command.mode; inputText = "" }
+            return nil
+        }
+        let recovered = recoveredDraft
+        let id = UUID()
+        let document = includeCurrentDocument ? (recovered?.document ?? ManuscriptRevisionBridge.capture(id: id, project: project)) : nil
+        if includeCurrentDocument && document == nil { throw AIRequestPreparationError.message(L10n.get("ai.error.contextUnavailable")) }
+        return AIQueuedMessage(id: id, text: body, conversationID: conversationID ?? selectedCardId ?? id,
+            project: project, provider: provider, mode: command?.mode ?? chatMode,
+            options: recovered?.options ?? requestOptions(for: provider), taggedIDs: recovered?.taggedIDs ?? taggedCardIds,
+            document: document, context: try recovered?.context ?? AIContextSelection.shared.manifest(projectURL: project))
+    }
+
+    private func consumeDraft() {
+        inputText = ""
+        clearChatModeTag()
+        newChatMode = nil
+        recoveredDraft = nil
+    }
+
+    func enqueueMessage(conversationID: UUID? = nil) {
+        do {
+            guard let draft = try captureDraft(conversationID: conversationID) else { return }
+            submissions.enqueue(draft)
+            consumeDraft()
+            selectedCardId = draft.conversationID
+            drainQueue()
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func resumeQueue() { submissions.resume(); drainQueue() }
+
+    private func drainQueue() {
+        guard case .connected(let provider) = connectionState,
+              let next = submissions.next(project: projectFolderURL, provider: provider,
+                                          isBusy: isProcessing || collaboration.isWorking) else { return }
+        if sendMessage(queued: next) { submissions.didDispatch(next.id) }
+        else { submissions.pause() }
+    }
+
+    func removeQueuedMessage(_ id: UUID) { submissions.remove(id) }
+    func moveQueuedMessage(_ id: UUID, to target: UUID) { submissions.move(id, to: target) }
+
+    func recoverQueuedMessage(_ id: UUID) {
+        guard let recovered = submissions.recoverableMessage(id) else { return }
+        do {
+            // The source chat remains cached. Swap the destination chat's draft
+            // into the queue, so recovering across chats cannot erase either draft.
+            selectedCardId = recovered.conversationID
+            let displaced = try captureDraft()
+            guard submissions.recover(id, replacingWith: displaced) != nil else { return }
+            consumeDraft()
+            inputText = recovered.text
+            chatMode = recovered.mode
+            includeCurrentDocument = recovered.document != nil
+            recoveredDraft = recovered
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func sendImmediateMessage() {
+        guard isProcessing else { sendMessage(); return }
+        do {
+            guard let draft = try captureDraft() else { return }
+            steer(draft, fromQueue: false)
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func steerQueuedMessage(_ id: UUID) {
+        guard let draft = submissions.message(id) else { return }
+        steer(draft, fromQueue: true)
+    }
+
+    private func steer(_ draft: AIQueuedMessage, fromQueue: Bool) {
+        guard steeringMessageID == nil else { return }
+        guard let active = activeChat, active.request == requestId,
+              active.conversation == draft.conversationID, draft.project == projectFolderURL else {
+            errorMessage = AISteeringError.unavailable.localizedDescription; return
+        }
+        guard active.provider == .chatgpt else {
+            errorMessage = AISteeringError.unsupported.localizedDescription; return
+        }
+        let instruction: String
+        do { instruction = try draft.steeringInstruction() }
+        catch { errorMessage = error.localizedDescription; return }
+        let originalDraftRevision = draftRevision
+        guard let steeringToken = submissions.beginSteering(draft.id) else { return }
+        errorMessage = nil
+        Task { [weak self] in
+            guard let self else { return }
+            var accepted = false
+            defer {
+                if submissions.finishSteering(steeringToken, accepted: accepted) { drainQueue() }
+            }
+            do {
+                try await processManager.steer(instruction)
+                guard projectFolderURL == draft.project, submissions.ownsSteering(steeringToken),
+                      let index = messages.firstIndex(where: { $0.id == active.assistant }) else { return }
+                let response = messages[index]
+                // The acknowledgement is the acceptance boundary. No second assistant turn is created.
+                messages.insert(AIMessage(id: draft.id, role: .user, content: draft.text,
+                    conversationId: active.conversation, provider: active.provider.rawValue,
+                    model: response.model, reasoningEffort: response.reasoningEffort), at: index)
+                if !fromQueue && draftRevision == originalDraftRevision { consumeDraft() }
+                accepted = true
+                if !persist() { submissions.pause() }
+            } catch {
+                guard projectFolderURL == draft.project, submissions.ownsSteering(steeringToken) else { return }
+                errorMessage = error.localizedDescription // leave the queue/draft intact; never retry implicitly
+            }
+        }
+    }
 }

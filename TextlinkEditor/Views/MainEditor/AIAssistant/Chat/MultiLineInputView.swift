@@ -13,8 +13,10 @@ struct MultiLineInputView: NSViewRepresentable {
     let minHeight: CGFloat
     let maxHeight: CGFloat
     let onSubmit: () -> Void
+    var onImmediateSubmit: (() -> Void)?
     var onModeSelected: ((AIChatMode) -> Void)?
     var focusRequest: Int
+    var composerID: String?
 
     init(
         text: Binding<String>,
@@ -24,8 +26,10 @@ struct MultiLineInputView: NSViewRepresentable {
         minHeight: CGFloat = 32,
         maxHeight: CGFloat = 120,
         onSubmit: @escaping () -> Void,
+        onImmediateSubmit: (() -> Void)? = nil,
         onModeSelected: ((AIChatMode) -> Void)? = nil,
-        focusRequest: Int = 0
+        focusRequest: Int = 0,
+        composerID: String? = nil
     ) {
         self._text = text
         self._contentHeight = contentHeight
@@ -34,8 +38,10 @@ struct MultiLineInputView: NSViewRepresentable {
         self.minHeight = minHeight
         self.maxHeight = maxHeight
         self.onSubmit = onSubmit
+        self.onImmediateSubmit = onImmediateSubmit
         self.onModeSelected = onModeSelected
         self.focusRequest = focusRequest
+        self.composerID = composerID
     }
 
     func makeCoordinator() -> Coordinator {
@@ -47,7 +53,10 @@ struct MultiLineInputView: NSViewRepresentable {
         let textView = InputTextView(frame: NSRect(x: 0, y: 0, width: 240, height: minHeight))
 
         textView.delegate = context.coordinator
-        textView.isEditable = true
+        textView.submitImmediately = { [weak coordinator = context.coordinator] in
+            coordinator?.submit(immediately: true)
+        }
+        textView.isEditable = !isDisabled
         textView.isSelectable = true
         textView.backgroundColor = .clear
         textView.drawsBackground = false
@@ -85,9 +94,16 @@ struct MultiLineInputView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
 
         let shouldFocus = context.coordinator.parent.focusRequest != focusRequest
+        let changedComposer = context.coordinator.parent.composerID != composerID
+        context.coordinator.isRestoring = true
+        defer { context.coordinator.isRestoring = false }
+        if changedComposer {
+            textView.inputContext?.discardMarkedText()
+            textView.unmarkText()
+        }
         context.coordinator.parent = self
         if shouldFocus && !isDisabled { textView.window?.makeFirstResponder(textView) }
-        if textView.string != text && !textView.hasMarkedText() {
+        if changedComposer || (textView.string != text && !textView.hasMarkedText()) {
             textView.string = text
             textView.undoManager?.removeAllActions()
             // 텍스트가 외부에서 변경된 경우 높이 재계산
@@ -104,13 +120,14 @@ struct MultiLineInputView: NSViewRepresentable {
         var parent: MultiLineInputView
         weak var textView: NSTextView?
         private var placeholderLabel: NSTextField?
+        var isRestoring = false
 
         init(_ parent: MultiLineInputView) {
             self.parent = parent
         }
 
         func textDidChange(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else { return }
+            guard !isRestoring, let textView = notification.object as? NSTextView else { return }
             if !textView.hasMarkedText(), let onModeSelected = parent.onModeSelected,
                let draft = AIChatMode.extractDraftTag(textView.string, selection: textView.selectedRange()) {
                 onModeSelected(draft.mode)
@@ -126,17 +143,22 @@ struct MultiLineInputView: NSViewRepresentable {
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                if NSEvent.modifierFlags.contains(.shift) {
+                if textView.hasMarkedText() { return false }
+                let modifiers = NSApp.currentEvent?.modifierFlags ?? []
+                if modifiers.contains(.shift) {
                     textView.insertNewlineIgnoringFieldEditor(nil)
                     return true
                 }
-                if textView.hasMarkedText() { return false }
-                if !parent.text.isEmpty && !parent.isDisabled {
-                    parent.onSubmit()
-                }
+                submit(immediately: modifiers.contains(.command))
                 return true
             }
             return false
+        }
+
+        func submit(immediately: Bool) {
+            guard !parent.isDisabled, !parent.text.isEmpty else { return }
+            if immediately, let action = parent.onImmediateSubmit { action() }
+            else { parent.onSubmit() }
         }
 
         /// 텍스트 내용에 따른 높이 계산 및 업데이트
@@ -215,6 +237,19 @@ private final class InputScrollView: NSScrollView {
 }
 
 private class InputTextView: NSTextView {
+    var submitImmediately: (() -> Void)?
+    override func keyDown(with event: NSEvent) {
+        if !handleImmediateSubmission(event) { super.keyDown(with: event) }
+    }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        handleImmediateSubmission(event) || super.performKeyEquivalent(with: event)
+    }
+    private func handleImmediateSubmission(_ event: NSEvent) -> Bool {
+        guard isEditable, !hasMarkedText(), event.keyCode == 36 || event.keyCode == 76,
+              event.modifierFlags.contains(.command), !event.modifierFlags.contains(.shift) else { return false }
+        submitImmediately?()
+        return true
+    }
     // NSTextView owns composed-character edits, IME groups, selection replacement, and delegate notifications.
     @objc func undo(_ sender: Any?) { undoManager?.undo() }
     @objc func redo(_ sender: Any?) { undoManager?.redo() }

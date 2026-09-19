@@ -16,6 +16,21 @@ struct MarkdownSyntaxDocument {
     }
     let spans: [Span]
 
+    private init(spans: [Span]) { self.spans = spans }
+
+    /// Preserve block context across the window edges, then translate only visible spans.
+    func window(_ range: NSRange) -> MarkdownSyntaxDocument {
+        func local(_ value: NSRange) -> NSRange? {
+            let intersection = NSIntersectionRange(value, range)
+            guard intersection.length > 0 else { return nil }
+            return NSRange(location: intersection.location - range.location, length: intersection.length)
+        }
+        return MarkdownSyntaxDocument(spans: spans.compactMap { span in
+            guard let clipped = local(span.range) else { return nil }
+            return Span(kind: span.kind, range: clipped, markers: span.markers.compactMap(local))
+        })
+    }
+
     init(source: String) {
         let map = MarkdownSourceCoordinates(source)
         let text = source as NSString

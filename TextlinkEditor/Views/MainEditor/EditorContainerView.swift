@@ -369,7 +369,7 @@ struct EditorContainerView: View {
                 let content = try await tabManager.readDocument(at: url)
                 let prepared = content.utf8.count > 250_000
                     ? try await PreparedManuscript.prepare(text: content, fontName: fontName, fontSize: fontSize,
-                        lineHeightMultiple: lineSpacingOption.lineHeightMultiple, letterSpacing: letterSpacing, color: AppColors.nsEditorText)
+                        lineHeightMultiple: lineSpacingOption.lineHeightMultiple, letterSpacing: letterSpacing, color: AppColors.nsEditorText, buildsStorage: false)
                     : nil
                 guard !Task.isCancelled, documentLoadID == request,
                       currentDocumentID == documentID, tabManager.selectedTab?.id == documentID,

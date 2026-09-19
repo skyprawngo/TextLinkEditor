@@ -48,7 +48,7 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
         let coordinator = context.coordinator
         let native = NativeManuscriptTextView()
         coordinator.sourceVisible = isSourceVisible
-        native.load(text, prepared: preparedContent)
+        native.loadDocument(text, prepared: preparedContent)
         configure(native)
         let host = NativeManuscriptHost(textView: native)
         coordinator.host = host
@@ -60,7 +60,7 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
         if let documentID { coordinator.editors[documentID] = native }
         native.delegate = coordinator
         if let position = initialCursorPosition {
-            native.setSelectedRange(NSRange(location: native.offset(line: position.line, column: position.column), length: 0))
+            native.selectDocumentPosition(line: position.line, column: position.column)
         }
         coordinator.flushObserver = NotificationCenter.default.addObserver(
             forName: Notification.Name("editorWillPerformFileOperation"), object: nil, queue: .main
@@ -74,10 +74,10 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
             guard coordinator.parent.isDocumentActive?(coordinator.documentID, coordinator.documentURL, coordinator.contentRevision) ?? true,
                   let native = coordinator.host?.textView, native.isEditable else { return }
             if let capture = notification.userInfo?["captureSelection"] as? (String, NSRange) -> Void {
-                capture(native.string, native.selectedRange())
+                capture(native.documentText, native.documentSelection)
             }
             if let apply = notification.userInfo?["applyRevision"] as? (String, NSRange) -> String?,
-               let value = apply(native.string, native.selectedRange()) {
+               let value = apply(native.documentText, native.documentSelection) {
                 native.applyExternalText(value, undoable: true)
                 coordinator.flush()
             }
@@ -111,20 +111,20 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
             coordinator.flush()
             host.textView.delegate = nil
             let native = documentID.flatMap { coordinator.editors[$0] } ?? NativeManuscriptTextView()
-            if native.string != text { native.load(text, prepared: preparedContent) }
+            if native.documentText != text { native.loadDocument(text, prepared: preparedContent) }
             if let documentID { coordinator.editors[documentID] = native }
             if let position = initialCursorPosition {
-                native.setSelectedRange(NSRange(location: native.offset(line: position.line, column: position.column), length: 0))
+                native.selectDocumentPosition(line: position.line, column: position.column)
             }
             host.documentView = native
             host.tile()
             native.delegate = coordinator
             coordinator.pendingText = nil
-        } else if contentChanged && coordinator.pendingText == nil && host.textView.string != text {
+        } else if contentChanged && coordinator.pendingText == nil && host.textView.documentText != text {
             if finishedLoading {
-                host.textView.load(text, prepared: preparedContent)
+                host.textView.loadDocument(text, prepared: preparedContent)
                 if let position = initialCursorPosition {
-                    host.textView.setSelectedRange(NSRange(location: host.textView.offset(line: position.line, column: position.column), length: 0))
+                    host.textView.selectDocumentPosition(line: position.line, column: position.column)
                 }
             } else {
                 host.textView.applyExternalText(text, prepared: preparedContent)
@@ -192,7 +192,7 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
             publishText(native)
         }
         func textViewDidChangeSelection(_ notification: Notification) {
-            guard !isUpdating else { return }
+            guard !isUpdating, host?.textView.windowedDocument?.installing != true else { return }
             host?.textView.refreshMarkdownRendering()
             publishSelection()
         }
@@ -203,13 +203,13 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
             native.rebuildLineIndex()
             guard native.isEditable else { return }
             publishText(native)
-            if parent.isDocumentActive?(documentID, documentURL, contentRevision) ?? true { parent.text = native.string }
+            if parent.isDocumentActive?(documentID, documentURL, contentRevision) ?? true { parent.text = native.documentText }
         }
         private func publishText(_ native: NativeManuscriptTextView) {
             textPublication &+= 1
             let publication = textPublication
-            let value = native.string
-            let position = native.position(at: native.selectedRange().location)
+            let value = native.documentText
+            let position = native.documentPosition(at: native.documentSelection.location)
             pendingText = value
             parent.onContentWillChange?(documentURL, value, position.line, position.column)
             let id = documentID, url = documentURL, revision = contentRevision
@@ -225,9 +225,9 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
             let publication = selectionPublication
             guard let native = host?.textView else { return }
             if viewportReady { scheduleViewportSave() }
-            let range = native.selectedRange()
-            let position = native.position(at: range.location)
-            let selected = range.length == 0 ? nil : (position.line + 1)...(native.line(at: NSMaxRange(range)) + 1)
+            let range = native.documentSelection
+            let position = native.documentPosition(at: range.location)
+            let selected = range.length == 0 ? nil : (position.line + 1)...(native.documentPosition(at: NSMaxRange(range)).line + 1)
             let id = documentID, url = documentURL, revision = contentRevision
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.selectionPublication == publication, self.documentID == id, self.contentRevision == revision,
@@ -265,7 +265,7 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
         func saveViewport() {
             viewportSave?.cancel()
             guard viewportReady, parent.isEditable, let url = documentURL,
-                  let snapshot = host?.textView.scrollCoordinator.snapshot() else { return }
+                  let snapshot = host?.textView.documentViewportSnapshot() else { return }
             parent.viewportStore.save(snapshot, for: url)
         }
 
@@ -275,7 +275,7 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
             viewportSave?.cancel()
             guard parent.isEditable, let url = documentURL, let native = host?.textView,
                   let saved = parent.viewportStore.position(for: url) else { return false }
-            native.scrollCoordinator.reopen(saved)
+            native.reopenDocumentViewport(saved)
             return true
         }
 

@@ -12,7 +12,10 @@ final class NativeManuscriptHost: NSScrollView {
         super.scrollWheel(with: event)
     }
     override var documentView: NSView? {
-        didSet { scrollMotion.cancel() }
+        didSet {
+            scrollMotion.cancel()
+            (documentView as? NativeManuscriptTextView)?.windowedDocument?.attach(to: self)
+        }
     }
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow == nil { scrollMotion.cancel() }
@@ -95,8 +98,10 @@ final class NativeManuscriptHost: NSScrollView {
         super.init(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
         contentView = EditorBounceClipView(frame: contentView.frame)
         verticalScrollElasticity = .none
-        hasVerticalScroller = true
-        autohidesScrollers = true
+        // Native scrollers describe the resident TextKit window, not the full
+        // manuscript. Keep them disabled instead of mixing both coordinate spaces.
+        hasVerticalScroller = false
+        hasHorizontalScroller = false
         borderType = .noBorder
         drawsBackground = false
         documentView = textView

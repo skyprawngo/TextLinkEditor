@@ -12,9 +12,9 @@ struct CollaborationEngine {
                  sessionID: String? = nil, stream: @escaping @MainActor @Sendable (String) -> Void = { _ in }) async throws -> CLIPromptResult {
         let state = try store.load()
         guard let task = state.tasks.first(where: { $0.id == taskID }) else { throw CollaborationFailure.damagedStore }
+        try checkEditor()
         let before = try store.snapshot()
         let metadataBefore = try WritingWorkspaceStore(projectURL: store.project).load()
-        try checkEditor()
         for change in task.changes where task.transactionIDs.isEmpty {
             guard before[change.path] == change.after else { throw CollaborationFailure.conflict }
         }
@@ -39,10 +39,15 @@ struct CollaborationEngine {
               refreshed.canonVersion == state.canonVersion else { throw CollaborationFailure.conflict }
         let responseData = Data(result.response.utf8)
         guard responseData.count <= CollaborationStore.byteLimit else { throw CollaborationFailure.tooLarge }
-        let proposal: CollaborationProposal
+        var proposal: CollaborationProposal
         do { proposal = try JSONDecoder().decode(CollaborationProposal.self, from: responseData) }
         catch { throw CollaborationFailure.invalidResponse }
-        try store.updateTask(taskID) { $0.phase = .validating; $0.proposal = proposal }
+        let capturedProposal = proposal
+        for index in proposal.edits.indices {
+            proposal.edits[index].content = try proposal.edits[index].resolvedContent(base: before[proposal.edits[index].path])
+            proposal.edits[index].replacements = nil
+        }
+        try store.updateTask(taskID) { $0.phase = .validating; $0.proposal = capturedProposal }
         try validate(proposal, before: before, task: task, state: state)
         let unanswered = Set(proposal.questions.map(\.id)).subtracting(task.questions.filter { $0.answer != nil }.map(\.id))
         let applicable = proposal.edits.filter { Set($0.dependsOn).isDisjoint(with: unanswered) }
@@ -59,15 +64,13 @@ struct CollaborationEngine {
             } else if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
         }
         try checkEditor()
-        guard try store.snapshot() == before else { throw CollaborationFailure.conflict }
         guard try WritingWorkspaceStore(projectURL: store.project).load() == metadataBefore else { throw CollaborationFailure.conflict }
         _ = try CollaborationApplier(store: store, checkEditor: checkEditor).apply(taskID: taskID, before: before, changes: changes)
-        var after = before
-        for change in changes { after[change.path] = change.after }
+        let after = try store.snapshot()
         // Facts only become authoritative when backed by actual current source.
         try updateCanon(proposal.facts, contents: after, task: task, state: state)
         try store.update { document in
-            for change in task.changes + changes { document.baseline[change.path] = change.after }
+            for change in task.changes + changes { document.baseline[change.path] = after[change.path] }
             document.canonVersion += 1
             guard let index = document.tasks.firstIndex(where: { $0.id == taskID }) else { throw CollaborationFailure.damagedStore }
             document.tasks[index].summary = proposal.summary
@@ -106,7 +109,7 @@ struct CollaborationEngine {
         Earlier session paths are stale. Use relative paths under this copy. Never write files directly.
         Return ONLY one JSON object (no fences) in this exact schema:
         {"summary":"user-facing result in the user's language",
-         "edits":[{"path":"relative.md","content":"complete new file content or null to delete",
+         "edits":[{"path":"relative.md","replacements":[{"oldText":"unique exact source excerpt","newText":"replacement excerpt"}],
                    "reason":"why","evidence":[{"path":"relative.md","quote":"exact source excerpt"}],"dependsOn":[]}],
          "questions":[{"id":"stable-question-id","question":"author decision","evidence":[{"path":"relative.md","quote":"exact excerpt"}],"options":["choice A","choice B"]}],
          "facts":[{"id":"stable-fact-id","name":"fact label","path":"relative.md","quote":"exact excerpt in resulting file",
@@ -119,7 +122,13 @@ struct CollaborationEngine {
         Edit evidence must quote existing source documents, never proposed content.
         Question evidence may quote existing documents or the resulting content of independent edits
         that can be applied now. Never cite an edit waiting on an unanswered question.
-        The content value for deletion is JSON null, not the string "null".
+        For existing files use replacements, not line numbers or complete rewritten files.
+        Each oldText must occur exactly once in the original file. Include unchanged surrounding
+        text to disambiguate. All replacements refer to the same original and must not overlap.
+        For insertion include an existing anchor in oldText and retain it in newText.
+        For passage deletion use empty newText. Preserve exact whitespace and line endings.
+        For new files omit replacements and use content with the complete new text.
+        Only for explicit whole-file deletion omit replacements and use content: null.
         Make clear requested changes and necessary consistency updates throughout text documents.
         Preserve unrelated prose, style, plot, and content. Protected paths: \(protections)
         Canon source roots: \(roots). Current canon revision: \(state.canonVersion).
@@ -189,6 +198,7 @@ struct CollaborationEngine {
             }
         }
         for fact in facts {
+            guard contents[fact.path]?.contains(fact.quote) == true else { continue }
             let isCanonSource = state.canonRoots.contains { fact.path == $0 || fact.path.hasPrefix($0 + "/") }
             var entry = WritingLoreEntry()
             entry.name = fact.name

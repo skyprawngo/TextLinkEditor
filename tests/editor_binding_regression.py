@@ -19,7 +19,7 @@ sources += sorted((engine / 'EditorState').glob('*.swift'))
 sources += [root / 'TextlinkEditor/Services/Core/EditorToolRegistry.swift']
 sources += markdown_sources
 sources += sorted((root / 'TextlinkEditor/Services/Editor/Scroll').glob('*.swift'))
-sources += [root / 'TextlinkEditor/Services/FileSystem/Workspace/WorkspaceFileEvents.swift']
+sources += [root / 'TextlinkEditor/Services/FileSystem/Workspace/WorkspaceFileEvents.swift', root / 'TextlinkEditor/Services/FileSystem/Workspace/DocumentReconciliation.swift']
 sources += [views / 'PreparedManuscript.swift', views / 'EditorToolBridge.swift', *sorted(views.glob('NativeManuscript*.swift'))]
 representable = (views / 'TextlinkEditorRepresentable.swift').read_text().split('// MARK: - Preview')[0]
 representable = representable.replace('struct TextlinkEditorRepresentable: NSViewRepresentable {', 'struct TextlinkEditorRepresentable {\n    struct Context { let coordinator: Coordinator }')
@@ -88,27 +88,27 @@ view.textView.insertText("x", replacementRange: NSRange(location: NSNotFound, le
 expect(cache[urlA] == view.textView.string, "typing updates owner cache synchronously")
 drain()
 p.updateNSView(view, context: context)
-expect(view.textView.undoManager!.canUndo, "A records undo")
+expect(view.textView.manuscriptUndoManager.canUndo, "A records undo")
 let aText = content.value
 content.value = aText
 active.value = (b, urlB)
 p = parent(b, urlB)
 p.updateNSView(view, context: context)
 drain()
-expect(!view.textView.undoManager!.canUndo, "same text B has independent undo")
+expect(!view.textView.manuscriptUndoManager.canUndo, "same text B has independent undo")
 active.value = (a, urlA)
 p = parent(a, urlA)
 p.updateNSView(view, context: context)
 drain()
-expect(view.textView.undoManager!.canUndo, "A undo retained after B")
-view.textView.undoManager!.undo()
+expect(view.textView.manuscriptUndoManager.canUndo, "A undo retained after B")
+view.textView.manuscriptUndoManager.undo()
 expect(view.textView.string == "same", "A undo restores own text")
 content.value = view.textView.string
 let renamed = URL(fileURLWithPath: "/tmp/renamed.md")
 active.value = (a, renamed)
 p = parent(a, renamed)
 p.updateNSView(view, context: context)
-expect(view.textView.undoManager!.canRedo, "same UUID rename preserves redo")
+expect(view.textView.manuscriptUndoManager.canRedo, "same UUID rename preserves redo")
 view.textView.setMarkedText("한", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
 NotificationCenter.default.post(name: Notification.Name("editorWillPerformFileOperation"), object: nil)
 expect(cache[renamed] == view.textView.string && content.value.contains("한"), "flush owns renamed document")
@@ -139,7 +139,7 @@ expect(content.value == "B external revision", "queued same-document callback ca
 let reloaded = parent(b, urlB)
 reloaded.updateNSView(view, context: context)
 expect(view.textView.string == "B external revision", "external revision clears pending buffer")
-expect(!view.textView.undoManager!.canUndo, "external revision invalidates obsolete undo")
+expect(!view.textView.manuscriptUndoManager.canUndo, "external revision invalidates obsolete undo")
 // A failed read presents a disabled empty state but must never become a saved draft.
 var invalid = parent(b, urlB)
 invalid = TextlinkEditorRepresentable(text: binding(content), cursorLine: binding(cursorLine), cursorColumn: binding(cursorColumn),
@@ -215,7 +215,7 @@ expect(counting.string == content.value, "changed binding without revision still
 counting.insertText("native ", replacementRange: NSRange(location: 0, length: 0))
 drain()
 parent(b, urlB).updateNSView(view, context: context)
-expect(counting.string == content.value && counting.undoManager!.canUndo, "native publication retains text and undo with snapshot guard")
+expect(counting.string == content.value && counting.manuscriptUndoManager.canUndo, "native publication retains text and undo with snapshot guard")
 var presentationCount = 0
 var updatingView = false
 var toggle = parent(b, urlB)
@@ -252,10 +252,10 @@ let updatedBold = live.textStorage!.attribute(.font, at: 2, effectiveRange: nil)
 expect(NSFontManager.shared.traits(of: updatedBold).contains(.boldFontMask), "view configuration must retain formatted bold")
 let spacing = live.textStorage!.attribute(.paragraphStyle, at: 2, effectiveRange: nil) as! NSParagraphStyle
 expect(spacing.lineHeightMultiple == 1.25, "formatted mode uses the same editor line spacing")
-expect(!live.undoManager!.canUndo, "display toggle does not add undo entries")
+expect(!live.manuscriptUndoManager.canUndo, "display toggle does not add undo entries")
 live.insertText("NEW", replacementRange: NSRange(location: 2, length: 4))
 expect(live.string.hasPrefix("**NEW**"), "editing formatted content preserves Markdown delimiters")
-live.undoManager!.undo()
+live.manuscriptUndoManager.undo()
 expect(live.string == rawMarkdown, "formatted edit supports native undo")
 live.setMarkdownRendering(false)
 let markerFont = live.textStorage!.attribute(.font, at: 0, effectiveRange: nil) as! NSFont
@@ -427,6 +427,17 @@ shiftedCoordinator.saveViewport()
 expect(reloadedStore.position(for: urlB)?.cursorTextBefore == "B", "cursor-adjacent text is persisted")
 TextlinkEditorRepresentable.dismantleNSView(shiftedHost, coordinator: shiftedCoordinator)
 shiftedWindow.close()
+
+let concurrentView = NativeManuscriptTextView()
+concurrentView.isEditable = true
+let concurrentBase = "첫째\n둘째\n셋째"
+let concurrentHuman = "사람이 추가\n첫째\n둘째\n셋째"
+concurrentView.loadDocument(concurrentHuman)
+let concurrentMerged = try! ManuscriptTextMerge.merge(base: concurrentBase, current: concurrentView.documentText, proposed: "첫째\nAI 교체\n셋째")
+concurrentView.applyExternalText(concurrentMerged, undoable: true)
+expect(concurrentView.documentText == "사람이 추가\n첫째\nAI 교체\n셋째", "native AI patch retains typing before shifted target")
+concurrentView.manuscriptUndoManager.undo()
+expect(concurrentView.documentText == concurrentHuman, "native Undo removes only merged AI edit")
 print("EDITOR BINDING REGRESSION COMPLETED")
 '''
 with tempfile.TemporaryDirectory(prefix='lore-binding-tests-') as directory:

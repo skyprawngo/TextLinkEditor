@@ -108,8 +108,8 @@ struct TextlinkEditorCommands: Commands {
             }
         }
         CommandGroup(replacing: .undoRedo) {
-            Button(L10n.get("shortcut.edit.undo")) { NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) }.configuredShortcut(.undo)
-            Button(L10n.get("shortcut.edit.redo")) { NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) }.configuredShortcut(.redo)
+            Button(L10n.get("shortcut.edit.undo")) { NSApp.sendAction(#selector(NativeManuscriptTextView.undo(_:)), to: nil, from: nil) }.configuredShortcut(.undo)
+            Button(L10n.get("shortcut.edit.redo")) { NSApp.sendAction(#selector(NativeManuscriptTextView.redo(_:)), to: nil, from: nil) }.configuredShortcut(.redo)
         }
         CommandGroup(replacing: .pasteboard) {
             Button(L10n.get("shortcut.edit.cut")) { NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil) }.configuredShortcut(.cut)

@@ -127,6 +127,7 @@ struct AIRequestOptions {
     var model: String?
     var effort: String?
     var readsProjectFiles = false
+    var allowsSteering = false
     func arguments(for type: AICLIType) -> [String] {
         var result: [String] = []
         if let model { result += ["--model", model] }

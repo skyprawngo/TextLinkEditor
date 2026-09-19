@@ -30,6 +30,23 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
 
 @main struct AIRegression {
     @MainActor static func main() async throws {
+        if CommandLine.arguments.contains("--live-steering") {
+            guard let path = await CLIDetector.shared.resolvedPath(for: .chatgpt) else { fatalError("Codex unavailable") }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TextlinkSteer-Live-" + UUID().uuidString)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let turn = CodexActiveTurn()
+            let task = Task { try await turn.run(path: path,
+                prompt: "This is an isolated UI integration test. First run the shell command sleep 6, then reply ONLY FIRST. Do not read or write files.",
+                directory: directory, sessionID: nil, options: .init(), allowsWorkspaceEdits: false, compactLimit: nil) { _ in } }
+            try await Task.sleep(for: .seconds(3))
+            do { try await turn.steer("Change the final answer to ONLY STEERING_CONFIRMED. Continue the same turn.") }
+            catch { turn.cancel(); _ = try? await task.value; throw error }
+            let result = try await task.value
+            precondition(result.response.contains("STEERING_CONFIRMED"), "live response did not reflect steering")
+            print("PASS live Codex same-turn steering reflected in final answer")
+            return
+        }
         if CommandLine.arguments.contains("--live-collaboration") {
             let project = FileManager.default.temporaryDirectory.appendingPathComponent("TextlinkEditor-Collaboration-Live-" + UUID().uuidString)
             try FileManager.default.createDirectory(at: project.appendingPathComponent("설정"), withIntermediateDirectories: true)
@@ -100,6 +117,10 @@ enum L10n { static func get(_ key: String) -> String { key == "ai.chat.documentP
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("TextlinkEditorAIRegression-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
+        try await checkChatDrafts(in: folder)
+        try await checkQueue(in: folder)
+        try await checkActiveTurn(in: folder)
+        try await checkSteeringViewModel(in: folder)
         try checkHistoryRepository(in: folder)
         try await checkCollaboration(in: folder)
         let a = folder.appendingPathComponent("A.weaveproj")

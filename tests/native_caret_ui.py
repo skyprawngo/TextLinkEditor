@@ -11,6 +11,7 @@ exec(s[:s.index("\nharness = r'''")],ns)
 import argparse
 parser=argparse.ArgumentParser(description='Build an isolated app to verify the actual blinking caret after clicks, scrolls and Markdown toggles.')
 parser.add_argument('--output', type=Path, required=True)
+parser.add_argument('--windowed', action='store_true', help='Exercise the production chunk window with a large manuscript.')
 args=parser.parse_args()
 app=args.output; binary=app/'Contents/MacOS/TextlinkCaretValidation'; binary.parent.mkdir(parents=True,exist_ok=True)
 (app/'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier':'local.textlink.caret.validation','CFBundleName':'TextlinkCaretValidation','CFBundleExecutable':'TextlinkCaretValidation','CFBundlePackageType':'APPL','NSHighResolutionCapable':True}))
@@ -31,6 +32,7 @@ final class Actions: NSObject, NSTextViewDelegate {
     var enabled = true
     @objc func toggle() { enabled.toggle(); view.setMarkdownRendering(enabled) }
     func textViewDidChangeSelection(_ notification: Notification) {
+        guard view.windowedDocument?.installing != true else { return }
         view.refreshMarkdownRendering()
         print("SELECTION", view.selectedRange())
     }
@@ -72,6 +74,9 @@ let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
 }
 app.run()
 '''
+if args.windowed:
+    harness = harness.replace('view.load(', 'view.loadDocument(').replace('(1...6)', '(1...2000)')
+    harness = harness.replace('print("SELECTION", view.selectedRange())', 'print("SELECTION", view.documentSelection, "WINDOW", view.windowedDocument?.range as Any)')
 main2=app/'Contents/MacOS/main.swift';main2.write_text(ns['prefix']+harness)
 subprocess.run(['swiftc',*ns['markdown_flags'](),*map(str,ns['sources']),str(main2),'-o',str(binary)],check=True)
 print(app)

@@ -3,23 +3,33 @@ import AppKit
 /// NSTextView owns input, selection, key bindings and undo. Only manuscript commands
 /// and the line-number accessory are app-specific. TextKit 2 owns viewport layout.
 final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, EditorToolTarget {
+    private lazy var windowPointer = ManuscriptWindowPointer(editor: self)
+    lazy var windowNavigation = ManuscriptWindowNavigation(editor: self)
     lazy var toolBridge = EditorToolBridge(editor: self)
     lazy var presentationCoordinator = ManuscriptPresentationCoordinator(editor: self)
     lazy var scrollCoordinator = EditorScrollCoordinator(editor: self)
     private var displayStyle: EditorDisplayStyle?
     private let markdownPresentation = MarkdownPresentationController()
     private var trackingMouseSelection = false
+    var isTrackingManuscriptSelection: Bool { trackingMouseSelection }
 
     // AppKit runs its mouse tracking loop inside mouseDown. The presentation
     // controller must not change marker geometry underneath its hit testing.
     override func mouseDown(with event: NSEvent) {
+        windowNavigation.reset()
         EditorFocusCoordinator.claimEditor(in: window)
         trackingMouseSelection = true
         defer {
             trackingMouseSelection = false
             refreshMarkdownRendering()
         }
+        if windowPointer.track(event) { return }
+        windowedDocument?.clearVirtualSelection()
         super.mouseDown(with: event)
+    }
+
+    override var shouldDrawInsertionPoint: Bool {
+        windowedDocument?.hasVirtualSelection != true && super.shouldDrawInsertionPoint
     }
 
     override func scrollRangeToVisible(_ range: NSRange) {
@@ -50,10 +60,13 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
     private lazy var inlinePresentation = ManuscriptInlinePanelController(editor: self)
     var inlinePanel: NSView? { inlinePresentation.panel }
 
+    var windowedDocument: ManuscriptWindowController?
     private let documentUndoManager = UndoManager()
-    override var undoManager: UndoManager? { documentUndoManager }
-    @objc func undo(_ sender: Any?) { commitComposition(); undoManager?.undo() }
-    @objc func redo(_ sender: Any?) { commitComposition(); undoManager?.redo() }
+    // AppKit must never register local-coordinate inverses in document history.
+    override var undoManager: UndoManager? { windowedDocument == nil ? documentUndoManager : nil }
+    var manuscriptUndoManager: UndoManager { windowedDocument?.undoManager ?? documentUndoManager }
+    @objc func undo(_ sender: Any?) { commitComposition(); manuscriptUndoManager.undo() }
+    @objc func redo(_ sender: Any?) { commitComposition(); manuscriptUndoManager.redo() }
     private var lineIndex = ManuscriptLineIndex()
     var lineStarts: [Int] { lineIndex.starts }
     private var storageEditObserver: NSObjectProtocol?
@@ -100,6 +113,7 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     deinit {
+        windowedDocument?.deactivate()
         if let storageEditObserver { NotificationCenter.default.removeObserver(storageEditObserver) }
     }
 
@@ -125,9 +139,15 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
     }
     func commitComposition() {
         if hasMarkedText() { unmarkText(); inputContext?.discardMarkedText() }
+        windowedDocument?.endComposition()
         breakUndoCoalescing()
     }
     func load(_ value: String, prepared: PreparedManuscript? = nil) {
+        commitComposition()
+        windowNavigation.reset()
+        windowedDocument?.deactivate()
+        windowedDocument = nil
+        allowsUndo = true
         markdownPresentation.invalidate()
         toolBridge.cancelPending()
         scrollCoordinator.cancel()
@@ -151,7 +171,7 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
     }
     /// Disk reloads and AI edits preserve the first visible text line, independent of the caret.
     func applyExternalText(_ value: String, prepared: PreparedManuscript? = nil, undoable: Bool = false) {
-        let original = string
+        let original = documentText
         guard original != value else { return }
         let oldLength = original.utf16.count
         let newLength = value.utf16.count
@@ -171,22 +191,23 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
             if offset >= oldLength - suffix { return max(0, offset + newLength - oldLength) }
             return prefix + min(offset - prefix, newLength - prefix - suffix)
         }
-        let selection = selectedRange()
+        let selection = documentSelection
+        let base = windowedDocument?.range.location ?? 0
         let style = displayStyle
         let anchor = scrollCoordinator.capture(for: .externalTextChange).map {
-            CursorViewportAnchor(offset: mapped($0.offset), screenY: $0.screenY)
+            CursorViewportAnchor(offset: mapped($0.offset + base), screenY: $0.screenY)
         }
         if undoable {
             let replacement = (value as NSString).substring(with: NSRange(location: prefix, length: newLength - prefix - suffix))
-            replace(NSRange(location: prefix, length: oldLength - prefix - suffix), with: replacement)
+            replaceDocument(NSRange(location: prefix, length: oldLength - prefix - suffix), with: replacement)
         } else {
-            load(value, prepared: prepared)
+            loadDocument(value, prepared: prepared)
             if let style { applyDisplayStyle(style) }
         }
         let start = mapped(min(selection.location, oldLength))
         let end = mapped(min(NSMaxRange(selection), oldLength))
-        setSelectedRange(NSRange(location: start, length: max(0, end - start)))
-        if let anchor { scrollCoordinator.restore(anchor) }
+        selectDocumentRange(NSRange(location: start, length: max(0, end - start)), reveal: false)
+        if let anchor { restoreDocumentAnchor(anchor) }
         needsLayout = true
         needsDisplay = true
     }
@@ -205,7 +226,7 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
-        guard selectedRange().length == 0,
+        guard windowedDocument?.hasVirtualSelection != true, selectedRange().length == 0,
               let viewport = textLayoutManager?.textViewportLayoutController.viewportRange,
               let location = textLocation(at: selectedRange().location),
               location.compare(viewport.location) != .orderedAscending,
@@ -225,7 +246,13 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
            EditorToolRegistry.perform(action.rawValue, on: self) { return true }
         return super.performKeyEquivalent(with: event)
     }
+    override func doCommand(by selector: Selector) {
+        if windowNavigation.perform(selector, native: { super.doCommand(by: $0) }) { return }
+        super.doCommand(by: selector)
+    }
+
     override func keyDown(with event: NSEvent) {
+        windowedDocument?.prepareForInput()
         if let action = KeyboardShortcutManager.shared.action(matching: event) {
             if EditorToolRegistry.perform(action.rawValue, on: self) { return }
             switch action {
@@ -234,8 +261,8 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
             case .moveLineUp, .moveLineDown, .duplicateLineUp, .duplicateLineDown:
                 guard isEditable else { return }
                 commitComposition()
-                let state = EditorState(text: string)
-                let range = selectedRange()
+                let state = EditorState(text: documentText)
+                let range = documentSelection
                 state.selection.select(from: state.document.positionFromUTF16Offset(range.location),
                                        to: state.document.positionFromUTF16Offset(NSMaxRange(range)))
                 let changed: Bool
@@ -246,10 +273,10 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
                 default: changed = state.duplicateLineDown()
                 }
                 if changed {
-                    replace(NSRange(location: 0, length: (textStorage?.length ?? 0)), with: state.getText())
+                    replaceDocument(NSRange(location: 0, length: documentText.utf16.count), with: state.getText())
                     let selection = state.selection.range.normalized
                     let start = state.document.utf16Offset(from: selection.start)
-                    setSelectedRange(NSRange(location: start, length: state.document.utf16Offset(from: selection.end) - start))
+                    selectDocumentRange(NSRange(location: start, length: state.document.utf16Offset(from: selection.end) - start))
                     scrollCoordinator.revealSelection()
                 }
                 return
@@ -257,6 +284,76 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
             }
         }
         super.keyDown(with: event)
+    }
+
+    override func selectAll(_ sender: Any?) {
+        guard let windowedDocument else { super.selectAll(sender); return }
+        windowedDocument.select(NSRange(location: 0, length: windowedDocument.document.length), reveal: false)
+    }
+    override func copy(_ sender: Any?) {
+        guard windowedDocument != nil else { super.copy(sender); return }
+        guard documentSelection.length > 0 else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString((documentText as NSString).substring(with: documentSelection), forType: .string)
+    }
+    override func cut(_ sender: Any?) {
+        guard let windowedDocument else { super.cut(sender); return }
+        guard isEditable, documentSelection.length > 0 else { return }
+        copy(sender)
+        windowedDocument.replace(documentSelection, with: "")
+    }
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        let value = (insertString as? NSAttributedString)?.string ?? (insertString as? String ?? "")
+        if let windowedDocument, windowedDocument.hasVirtualSelection || (!hasMarkedText() && value.utf16.count > 16_384) {
+            let selection = replacementRange.location == NSNotFound ? documentSelection
+                : NSRange(location: windowedDocument.range.location + replacementRange.location, length: replacementRange.length)
+            windowedDocument.replace(selection, with: value)
+            return
+        }
+        super.insertText(insertString, replacementRange: replacementRange)
+        windowedDocument?.endComposition()
+    }
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        if let windowedDocument, windowedDocument.hasVirtualSelection {
+            if documentSelection.length > 0 { windowedDocument.replace(documentSelection, with: "") }
+            else { windowedDocument.prepareForInput() }
+        }
+        windowedDocument?.beginComposition()
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+    }
+    override func unmarkText() {
+        super.unmarkText()
+        windowedDocument?.endComposition()
+    }
+    override func deleteBackward(_ sender: Any?) {
+        if let windowedDocument, windowedDocument.hasVirtualSelection, documentSelection.length > 0 {
+            windowedDocument.replace(documentSelection, with: ""); return
+        }
+        windowedDocument?.prepareForInput()
+        super.deleteBackward(sender)
+    }
+    override func deleteForward(_ sender: Any?) {
+        if let windowedDocument, windowedDocument.hasVirtualSelection, documentSelection.length > 0 {
+            windowedDocument.replace(documentSelection, with: ""); return
+        }
+        windowedDocument?.prepareForInput()
+        super.deleteForward(sender)
+    }
+    override func moveToBeginningOfDocument(_ sender: Any?) {
+        guard windowedDocument != nil else { super.moveToBeginningOfDocument(sender); return }
+        selectDocumentRange(NSRange(location: 0, length: 0))
+    }
+    override func moveToEndOfDocument(_ sender: Any?) {
+        guard let windowedDocument else { super.moveToEndOfDocument(sender); return }
+        selectDocumentRange(NSRange(location: windowedDocument.document.length, length: 0))
+    }
+    override func moveToBeginningOfDocumentAndModifySelection(_ sender: Any?) {
+        guard windowedDocument != nil else { super.moveToBeginningOfDocumentAndModifySelection(sender); return }
+        selectDocumentRange(NSRange(location: 0, length: NSMaxRange(documentSelection)))
+    }
+    override func moveToEndOfDocumentAndModifySelection(_ sender: Any?) {
+        guard let windowedDocument else { super.moveToEndOfDocumentAndModifySelection(sender); return }
+        selectDocumentRange(NSRange(location: documentSelection.location, length: windowedDocument.document.length - documentSelection.location))
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -351,8 +448,26 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
 
     override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
         guard super.shouldChangeText(in: affectedCharRange, replacementString: replacementString) else { return false }
-        if let replacementString { inlinePresentation.willReplace(affectedCharRange, with: replacementString) }
+        if let replacementString {
+            let base = windowedDocument?.range.location ?? 0
+            documentWillReplace(NSRange(location: base + affectedCharRange.location, length: affectedCharRange.length), with: replacementString)
+        }
         return true
+    }
+
+    func documentWillReplace(_ range: NSRange, with text: String) {
+        inlinePresentation.willReplace(range, with: text)
+    }
+
+    func didInstallWindow() {
+        textEditGeneration &+= 1
+        markdownPresentation.invalidate()
+        if let displayStyle {
+            textStorage?.addAttributes(displayStyle.changedAttributes(from: nil), range: NSRange(location: 0, length: textStorage?.length ?? 0))
+        }
+        refreshMarkdownRendering()
+        needsLayout = true
+        needsDisplay = true
     }
 
     override func didChangeText() {
@@ -365,12 +480,16 @@ final class NativeManuscriptTextView: NSTextView, NSTextLayoutManagerDelegate, E
     @objc private func attachSelectionToAI(_ sender: Any?) { EditorToolRegistry.perform("ai.attachSelection", on: self) }
     @objc private func commentSelection(_ sender: Any?) { EditorToolRegistry.perform("ai.collaborationComment", on: self) }
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if windowedDocument != nil {
+            if menuItem.action == #selector(copy(_:)) { return isSelectable && documentSelection.length > 0 }
+            if menuItem.action == #selector(cut(_:)) { return isEditable && documentSelection.length > 0 }
+        }
         if menuItem.action == #selector(openInlineAI(_:)) { return isEditable }
-        if menuItem.action == #selector(attachSelectionToAI(_:)) { return selectedRange().length > 0 }
-        if menuItem.action == #selector(commentSelection(_:)) { return selectedRange().length > 0 && !hasMarkedText() }
-        if menuItem.action == #selector(undo(_:)) { return isEditable && documentUndoManager.canUndo }
-        if menuItem.action == #selector(redo(_:)) { return isEditable && documentUndoManager.canRedo }
-        if menuItem.action == #selector(formatSelection(_:)) { return isEditable && selectedRange().length > 0 }
+        if menuItem.action == #selector(attachSelectionToAI(_:)) { return documentSelection.length > 0 }
+        if menuItem.action == #selector(commentSelection(_:)) { return documentSelection.length > 0 && !hasMarkedText() }
+        if menuItem.action == #selector(undo(_:)) { return isEditable && manuscriptUndoManager.canUndo }
+        if menuItem.action == #selector(redo(_:)) { return isEditable && manuscriptUndoManager.canRedo }
+        if menuItem.action == #selector(formatSelection(_:)) { return isEditable && documentSelection.length > 0 }
         return super.validateMenuItem(menuItem)
     }
     @objc private func formatSelection(_ sender: NSMenuItem) {

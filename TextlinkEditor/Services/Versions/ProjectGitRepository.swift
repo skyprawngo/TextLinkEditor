@@ -5,6 +5,7 @@ struct ProjectGitChange: Identifiable, Equatable, Sendable {
     var index: String
     var worktree: String
     var id: String { path }
+    var untracked: Bool { index == "?" && worktree == "?" }
     var staged: Bool { index != " " && index != "?" }
     var unstaged: Bool { worktree != " " }
     var isText: Bool { ["md", "txt", "markdown"].contains((path as NSString).pathExtension.lowercased()) }
@@ -58,7 +59,7 @@ struct ProjectGitRepository: Sendable {
     struct PushTarget: Equatable, Sendable { let branch: String; let remote: String; let ref: String }
     let project: URL
     static func safePath(_ path: String) -> Bool {
-        !path.isEmpty && !path.split(separator: "/", omittingEmptySubsequences: false).contains {
+        path == ".gitignore" || !path.isEmpty && !path.split(separator: "/", omittingEmptySubsequences: false).contains {
             $0.isEmpty || $0.hasPrefix(".") || $0.contains("\0") || $0.contains(":")
         }
     }
@@ -168,6 +169,25 @@ struct ProjectGitRepository: Sendable {
         guard try validateRoot() else { throw ProjectGitError.command }
         _ = try file(path)
         _ = try run(["--literal-pathspecs", "add", "--", path])
+    }
+    /// Add an exact, root-relative rule without changing the index or manuscript.
+    func ignore(_ path: String) throws {
+        guard try validateRoot() else { throw ProjectGitError.command }
+        _ = try file(path)
+        guard path != ".gitignore", !path.contains("\n"), !path.contains("\r") else { throw ProjectGitError.unsafePath }
+        let url = try file(".gitignore")
+        var contents = FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : Data()
+        // Git patterns interpret wildcards and trailing spaces unless escaped.
+        let escaped = path.reduce(into: "") { result, character in
+            if "\\*?[] !#".contains(character) { result.append("\\") }
+            result.append(character)
+        }
+        let rule = Data(("/" + escaped).utf8)
+        if contents.split(separator: 10).last == rule { return }
+        if !contents.isEmpty && contents.last != 10 { contents.append(10) }
+        contents.append(rule)
+        contents.append(10)
+        try contents.write(to: url, options: .atomic)
     }
     func unstage(_ path: String) throws {
         guard try validateRoot() else { throw ProjectGitError.command }

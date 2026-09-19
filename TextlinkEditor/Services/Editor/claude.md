@@ -20,17 +20,17 @@
 
 `EditorTabManager`가 열린 URL 집합을 전달하고 `FileSystem/Workspace/DocumentObservationController`가 감시·읽기 수명을 소유한다. 파일과 부모 디렉터리의 vnode 감시, `NSFilePresenter`, 앱 활성화·잠자기 복귀 및 5초 보완 검사를 함께 사용한다. 이벤트 후 백그라운드에서 완전한 본문을 읽고 탭 ID·요청 ID·기준본을 재검증한다. 원자적 파일 교체 후 감시는 다시 연결한다. `EditorContainerView`는 확인된 본문 갱신 알림만 화면에 적용한다.
 
-깨끗한 문서는 외부본을 반영한다. 양쪽이 수정되면 기준본과 앱 초안을 그대로 유지하고 조용히 충돌 상태로 둔다. 삭제되면 사이드바에서는 사라지지만 열린 본문은 유지하고 탭 제목에는 취소선을 표시한다. 자동 저장은 충돌·삭제 파일을 쓰지 않는다. 명시적 저장에서만 다른 이름 저장을 제안하며, 복사 저장은 기존 경로를 덮어쓰지 않는 배타적 생성이다. 충돌·삭제 탭을 닫으면 질문 없이 버리되 실제 닫기가 완료된 뒤 복구 세션을 동기 저장한다. 종료의 승인된 버리기 항목도 복원 목록에서 제외한다. 읽기 실패는 삭제로 간주하지 않는다.
+깨끗한 문서는 외부본을 반영한다. 양쪽이 수정되면 독립적인 텍스트 변경을 병합한다. 병합할 수 없는 경우에는 기준본과 앱 초안을 그대로 유지하고 충돌 상태로 둔다. 삭제되면 사이드바에서는 사라지지만 열린 본문은 유지하고 탭 제목에는 취소선을 표시한다. 자동 저장은 충돌·삭제 파일을 쓰지 않는다. 명시적 저장에서만 다른 이름 저장을 제안하며, 복사 저장은 기존 경로를 덮어쓰지 않는 배타적 생성이다. 충돌·삭제 탭을 닫으면 질문 없이 버리되 실제 닫기가 완료된 뒤 복구 세션을 동기 저장한다. 종료의 승인된 버리기 항목도 복원 목록에서 제외한다. 읽기 실패는 삭제로 간주하지 않는다.
 
 `tests/storage_regression.py`는 실제 임시 파일의 원자적 교체·직접 쓰기·비활성 탭·삭제·충돌·복사 저장·닫기 후 복구를 검증한다. 외부 쓰기는 강제 잠그지 않으며 비협조 writer와 최종 비교/교체 사이의 경쟁을 완전히 제거하는 계약은 아니다.
 
 ## 텍스트 엔진과 Undo
 
-구조는 [TextEngine](TextEngine/claude.md)에 있다. `TextlinkEditorRepresentable.Coordinator`가 문서 ID별 `NativeManuscriptTextView`를 보관한다. 각 NSTextView는 독립 UndoManager를 사용하며 탭 전환에서 이력을 유지하고, 닫힌 탭의 캐시는 해제한다. 디스크 새 버전이나 외부 본문 교체는 네이티브 본문을 다시 로드하고 이력을 초기화한다. Undo 스택 자체를 세션에 영속 저장하는 것은 아니다.
+구조는 [TextEngine](TextEngine/claude.md)에 있다. `TextlinkEditorRepresentable.Coordinator`가 문서 ID별 `NativeManuscriptTextView`를 보관한다. 각 문서는 독립 UndoManager를 사용하며 탭 전환에서 이력을 유지하고, 닫힌 탭의 캐시는 해제한다. 디스크 새 버전이나 외부 본문 교체는 네이티브 본문을 다시 로드하고 이력을 초기화한다. Undo 스택 자체를 세션에 영속 저장하는 것은 아니다.
 
 찾기·바꾸기와 서식 명령은 `EditorCommand`를 통해 텍스트·선택·Undo를 함께 바꾼다. 커서·선택 표시의 행 번호와 엔진의 0-based 위치를 혼동하지 않는다.
 
-현재 원고 화면은 `NativeManuscriptView.swift`의 NSTextView와 NSScrollView를 사용한다. AppKit이 단어/행/문서 이동·선택, IME, 클립보드, Undo를 처리한다. `NSTextContentStorage` → `NSTextLayoutManager` → `NSTextContainer`의 TextKit 2 구성을 사용한다. 줄 번호·현재 행 강조는 표시 중인 문단/행 fragment에서 계산한다. 이 경로에서 `NSTextView.layoutManager`에 접근하면 TextKit 1 호환 모드가 켜지므로 사용하지 않는다. 전체 원고의 행 시작 UTF-16 인덱스는 본문 변경 때 갱신하며, 저장 형식은 기존 문자열/원고 파일 계약을 유지한다. `tests/native_editor_regression.py`는 네이티브 명령과 합성 대용량 문서 비용을, `tests/editor_binding_regression.py`는 문서 귀속을 검증한다. 기존 Core Text 뷰는 비교·회귀용 소스로 남아 있으며 원고 화면에는 연결되지 않는다.
+현재 원고 화면은 `NativeManuscriptView.swift`의 NSTextView와 NSScrollView를 사용한다. AppKit이 글자 배치·단어/시각 행 이동·IME를 처리하고, 청크 투영 계층이 문서 좌표의 선택·클립보드·Undo를 연결한다. `NSTextContentStorage` → `NSTextLayoutManager` → `NSTextContainer`의 TextKit 2 구성을 사용한다. 줄 번호·현재 행 강조는 표시 중인 문단/행 fragment에서 계산한다. 이 경로에서 `NSTextView.layoutManager`에 접근하면 TextKit 1 호환 모드가 켜지므로 사용하지 않는다. 전체 원고의 행 시작 UTF-16 인덱스는 본문 변경 때 갱신하며, 저장 형식은 기존 문자열/원고 파일 계약을 유지한다. `tests/native_editor_regression.py`는 네이티브 명령과 합성 대용량 문서 비용을, `tests/editor_binding_regression.py`는 문서 귀속을 검증한다. 기존 Core Text 뷰는 비교·회귀용 소스로 남아 있으며 원고 화면에는 연결되지 않는다.
 
 부가 표시의 fragment 순회는 좌표뿐 아니라 `viewportRange`의 텍스트 끝 위치로 제한한다. 미배치 fragment는 좌표가 0일 수 있으므로 건너뛰며 계속 순회하면 문서 끝까지 객체를 생성한다. 화면 밖 커서의 강조 좌표도 조회하지 않는다. 네이티브 회귀 검사는 10만 줄의 연속 스크롤·역방향 점프에서 부가 조회가 만드는 fragment 수를 제한해 이 경계를 검증한다.
 
@@ -80,7 +80,15 @@ ATX/Setext 제목, 중첩 강조·취소선, 인용문·목록·체크리스트,
 
 ## 대용량 원고 로딩
 
-`DocumentFileStore.readInChunks`는 작업 스레드에서 64KB씩 읽고 완전한 UTF-8 본문만 전달한다. `PreparedManuscript`는 문단 경계의 청크마다 대체 글꼴을 미리 계산하고, 레이아웃 관리자가 없는 저장소를 화면에 한 번만 이전한다. 로딩 요청 ID와 문서 ID로 취소된 탭의 결과를 버리며 로딩 중에는 저장과 편집 캐시 갱신을 막는다. 전체 논리 문서는 네이티브 선택·Undo·저장을 위해 유지하며 디스크 페이지 편집기는 아니다. 준비된 저장소는 `NSTextContentStorage.textStorage`에 연결한다. 화면의 배치·캐시는 TextKit 2의 viewport controller가 담당하며 전체 문서 `ensureLayout`은 호출하지 않는다. `tests/chunked_loading_regression.py`는 취소·UTF-8 경계·백그라운드 준비·저장을 검증한다.
+`DocumentFileStore.readInChunks`는 작업 스레드에서 64KB씩 읽고 완전한 UTF-8 본문만 전달한다. 로딩 요청 ID와 문서 ID로 취소된 탭의 결과를 버리며 로딩 중에는 저장과 편집 캐시 갱신을 막는다. 대용량 로딩의 `PreparedManuscript`는 `buildsStorage: false`로 행 인덱스만 준비한다. 전체 속성 문자열을 미리 만들지 않는다.
+
+전체 원문·행 인덱스·마크다운 문맥은 `NativeManuscriptDocument`의 문서 모델에 있고, `NativeManuscriptWindow`가 화면 주변만 `NSTextStorage`에 투영한다. 기본 단위는 논리 행 256개, 상주 범위는 3개 청크다. 경계 128행 이내에서 앞/뒤 창으로 이동하고 공통 범위는 남긴 채 접두/접미 차분만 교체한다. 문단을 쪼개지 않으므로 한 행이 매우 긴 문서는 고정 바이트 상한이 아니다. 작은 문서는 하나의 창에 모두 들어간다. 디스크 페이징이나 전체 원문 메모리 제거를 뜻하지 않는다.
+
+지속되는 선택·검색·AI 범위·Undo는 문서 UTF-16 좌표를 쓴다. AppKit의 로컬 Undo 등록을 차단하고 `manuscriptUndoManager`로 문서 역연산을 실행한다. IME 조합은 한 Undo 그룹으로 묶고 조합 중에는 창을 바꾸지 않는다. `NativeManuscriptWindowNavigation`과 `NativeManuscriptWindowPointer`는 선택의 고정점이 퇴거된 뒤에도 문서 좌표를 유지한다. 저장/SwiftUI binding은 `documentText`, 선택 전달은 `documentSelection`을 사용한다. `string`과 `selectedRange()`는 TextKit 내부 좌표다.
+
+청크 변경은 현재 보이는 문자와 화면 안 Y 오프셋을 보존한다. 읽기 위치 기록에는 전체 문서 행 번호를 저장하고 재열기 시 해당 청크를 먼저 올린다. 네이티브 스크롤바는 비활성화한다. AppKit의 현재 청크 픽셀 범위와 전체 문서의 논리 행 비율을 같은 scroller에 혼합하지 않으며, reflectScrolledClipView에서 문자 hit-test나 청크 탐색을 하지 않는다. 휠·트랙패드·키보드 탐색은 유지한다. 상단 텍스트 여백과 바운스의 뷰포트 기준점은 현재 창의 첫 문자다. TextKit이 여백 hit-test를 청크 끝으로 반환하는 값으로 다음 청크를 요청하지 않는다. 마크다운은 전체 문서의 구문 문맥을 캐시하고 현재 창과 교차하는 span만 적용한다. 인라인 패널의 기준점도 문서 좌표로 유지하며 화면 밖에서는 숨긴다.
+
+`tests/native_window_regression.py`는 10만 행의 상주 범위·차분 교체·문서 좌표 Undo·조합·선택·위치 복원을 검증한다. `tests/native_cursor_regression.py --windowed`는 실제 앱과 같은 창 투영 경로의 클릭·커서/서식 전환 회귀를, `tests/native_caret_ui.py --windowed --output /tmp/TextlinkWindowValidation.app`는 별도 앱에서 실제 커서 표시를 확인하는 진입점이다. `tests/chunked_loading_regression.py`의 기존 전체 속성 저장소 경로는 비교용 검증으로 유지한다.
 
 
 ## 파일 관리 아키텍처 연결
@@ -111,3 +119,6 @@ ATX/Setext 제목, 중첩 강조·취소선, 인용문·목록·체크리스트,
 `tests/native_cursor_regression.py`는 클릭/화살표 이동과 116행의 화면 높이 60% 유지 조건을 검증한다. 실제 깜빡이는 커서는 `tests/native_caret_ui.py --output /tmp/TextlinkCaretValidation.app`로 별도 검증 앱을 빌드해 클릭·스크롤·서식 전환하며 확인한다. 활성 창의 실제 `NSTextInsertionIndicator` 프레임을 먼저 읽고 TextKit 선택 segment와 비교하며 `/tmp/textlink-caret-validation.log`에 결과를 기록한다. 비활성 테스트 창의 논리 좌표 검사만으로 실제 커서 표시 성공을 판정하지 않는다.
 
 `Session/EditorRecoveryWriter`는 복구 저장의 직렬 큐와 완료 세대 번호를 소유한다. `EditorTabManager`는 문서 snapshot과 UI 상태를 소유하고 writer에 불변 저장 작업을 전달한다. 명시적 저장은 이전 자동 저장 뒤에서 완료되고 프로젝트 복원은 이전 완료 콜백을 무효화한다.
+
+
+동시 수정은 `ManuscriptTextMerge`의 기준본·현재본·제안본 텍스트 병합을 사용한다. `saveTab`은 최신 디스크와 초안을 병합하고 실제 읽은 디스크를 기대값으로 저장하며, 병합으로 본문이 달라지면 표시 갱신 이벤트를 보낸다. 외부 갱신은 조합 중에는 재조회하고, 성공 시 디스크를 새 기준본으로 삼아 남은 초안의 수정 상태를 유지한다. AI 적용 직전에는 조합을 거부하고 미저장 초안을 같은 저장 경로로 보존한다. AI 삭제 구간의 우선권과 저널/Undo 계약은 [AI](../AI/claude.md)의 동시 수정 절을 참고한다.

@@ -11,16 +11,17 @@ struct CLIPromptResult {
 @MainActor
 final class CLIProcessManager: AIRequestExecuting {
     private var runner: CLIRequestRunner?
+    private var activeTurn: CodexActiveTurn?
 
     func sendPrompt(_ prompt: String, cliType: AICLIType, workingDirectory: URL?,
                     sessionId: String? = nil, allowsWorkspaceEdits: Bool = false, options: AIRequestOptions = .init(),
                     streamHandler: @escaping @MainActor @Sendable (String) -> Void) async throws -> CLIPromptResult {
-        guard runner == nil else { throw CLIError.busy }
+        guard runner == nil, activeTurn == nil else { throw CLIError.busy }
         guard let path = await CLIDetector.shared.resolvedPath(for: cliType) else {
             throw CLIError.notFound
         }
         try Task.checkCancellation()
-        guard runner == nil else { throw CLIError.busy }
+        guard runner == nil, activeTurn == nil else { throw CLIError.busy }
         // stdin avoids shell interpretation, argv length limits, and prompt exposure in process listings.
         let arguments: [String]
         let contextRoot = LoreCodexEnvironment.directory
@@ -28,7 +29,23 @@ final class CLIProcessManager: AIRequestExecuting {
             CodexContextMeter.threshold(model: options.model, root: contextRoot)
         }.value : nil
         try Task.checkCancellation()
-        guard runner == nil else { throw CLIError.busy }
+        guard runner == nil, activeTurn == nil else { throw CLIError.busy }
+        if cliType == .chatgpt && options.allowsSteering {
+            let current = CodexActiveTurn()
+            activeTurn = current
+            defer { if activeTurn === current { activeTurn = nil } }
+            return try await withTaskCancellationHandler {
+                var result = try await current.run(path: path, prompt: prompt, directory: workingDirectory,
+                    sessionID: sessionId, options: options, allowsWorkspaceEdits: allowsWorkspaceEdits,
+                    compactLimit: compactLimit, stream: streamHandler)
+                let completed = result
+                result.usage = await Task.detached {
+                    CodexContextMeter.read(sessionID: completed.sessionId, root: contextRoot,
+                        limit: compactLimit, usage: completed.usage)
+                }.value
+                return result
+            } onCancel: { Task { @MainActor in current.cancel() } }
+        }
         switch cliType {
         case .claude:
             var args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
@@ -71,7 +88,12 @@ final class CLIProcessManager: AIRequestExecuting {
         }
     }
 
-    func cancel() { runner?.cancel() }
+    func steer(_ instruction: String) async throws {
+        guard let activeTurn else { throw AISteeringError.unavailable }
+        try await activeTurn.steer(instruction)
+    }
+
+    func cancel() { runner?.cancel(); activeTurn?.cancel() }
 
     enum CLIError: LocalizedError {
         case notFound, unsupportedProvider, terminalUnavailable, busy, timeout, invalidOutput, authentication, incompatibleCLI, failed(Int32)
