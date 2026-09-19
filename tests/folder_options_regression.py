@@ -42,6 +42,20 @@ FILES += ['TextlinkEditor/Services/Editor/EditorTabManager.swift', 'TextlinkEdit
 FILES += [str(p.relative_to(ROOT)) for p in (ROOT / 'TextlinkEditor/Services/Editor/Session').glob('*.swift')]
 FILES += [str(p.relative_to(ROOT)) for p in (ROOT / 'TextlinkEditor/Services/FileSystem/Workspace').glob('*.swift')]
 SOURCE = SUPPORT + '\n'.join((ROOT / path).read_text() for path in FILES)
+row_source = (ROOT / 'TextlinkEditor/Views/MainEditor/Sidebar/ProjectExplorer/FileSystemItemRow.swift').read_text()
+finish_method = row_source.split('    private func finishEditing() {', 1)[1].split('    private func cancelEditing()', 1)[0]
+SOURCE += r'''
+final class RenameRowHarness {
+    var isEditing = true
+    var isTextFieldFocused = true
+    var editingName: String
+    let item: FileSystemItem
+    let fileSystemManager: FileSystemManager
+    var onCacheUpdate: (() -> Void)?
+    init(item: FileSystemItem, manager: FileSystemManager, name: String) {
+        self.item = item; fileSystemManager = manager; editingName = name
+    }
+''' + '    func finishEditing() {' + finish_method + '\n}\n'
 HARNESS = r'''
 func expect(_ value: @autoclosure () -> Bool, _ message: String) {
     precondition(value(), message)
@@ -69,7 +83,10 @@ manager.closeProject()
 manager.initializeProject(at: project)
 let reopened = manager.projectRoot!.children!.first!
 expect(reopened.iconName == "star", "reopening loads saved icon")
+manager.operationError = nil
 expect(manager.rename(reopened, to: "Renamed"), "folder rename succeeds")
+RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+expect(manager.operationError == nil, "renamed folder watcher must not reload its old path")
 let renamed = manager.projectRoot!.children!.first!
 expect(renamed.iconName == "star", "rename retains icon")
 manager.loadChildren(of: renamed)
@@ -114,7 +131,13 @@ let manuscript = manager.createFile(named: "draft.md", in: manager.projectRoot!,
 editor.openFile(manuscript)
 editor.setEditState(TabEditState(content: "unsaved", originalContent: "baseline"), for: manuscript.url)
 let tabID = editor.tabs[0].id
-expect(manager.rename(manuscript, to: "renamed-draft.md"), "sidebar rename command succeeds")
+manager.operationError = nil
+let renameRow = RenameRowHarness(item: manuscript, manager: manager, name: "renamed-draft.md")
+renameRow.onCacheUpdate = { renameRow.finishEditing() }
+renameRow.finishEditing()
+renameRow.finishEditing()
+expect(manager.operationError == nil, "duplicate rename callbacks do not raise file operation failure")
+expect(fm.fileExists(atPath: project.appendingPathComponent("renamed-draft.md").path), "sidebar rename command succeeds")
 let renamedDocument = project.appendingPathComponent("renamed-draft.md")
 expect(editor.tabs[0].id == tabID && editor.tabs[0].url == renamedDocument, "sidebar and tab use same committed path")
 expect(editor.getCachedContent(for: renamedDocument) == "unsaved", "sidebar rename retains live editor draft")

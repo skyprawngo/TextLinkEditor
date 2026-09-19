@@ -29,6 +29,7 @@ struct FileSystemItemRow: View {
         isItemSelected?(item.id) ?? false
     }
 
+    @State private var shortcuts = KeyboardShortcutManager.shared
     @State private var isHovered: Bool = false
     @State private var isEditing: Bool = false
     @State private var editingName: String = ""
@@ -137,6 +138,7 @@ struct FileSystemItemRow: View {
             isHovered = hovering
         }
         .onTapGesture {
+            EditorFocusCoordinator.claimSidebar(in: NSApp.keyWindow)
             let modifiers = currentEventModifiers()
             onSelect(item, modifiers)
             // Shift/Command 없이 폴더 클릭 시에만 펼치기/접기
@@ -155,12 +157,16 @@ struct FileSystemItemRow: View {
         .focusable(!isEditing)
         .focusEffectDisabled()
         .focused($isRowFocused)
-        .onKeyPress(.return) {
-            if isSelected && !isEditing {
-                startEditing()
-                return .handled
+        .onKeyPress(phases: .down) { _ in
+            guard isSelected, !isEditing, let event = NSApp.currentEvent,
+                  let action = shortcuts.action(matching: event) else { return .ignored }
+            switch action {
+            case .copyPath: copyPath(relative: false)
+            case .copyRelativePath: copyPath(relative: true)
+            case .renameItem: startEditing()
+            default: return .ignored
             }
-            return .ignored
+            return .handled
         }
         .onChange(of: isSelected) { _, newValue in
             if !newValue {
@@ -209,7 +215,12 @@ struct FileSystemItemRow: View {
     // MARK: - Expand Button
 
     private var expandButton: some View {
-        Button(action: { toggleExpand() }) {
+        Button(action: {
+            EditorFocusCoordinator.claimSidebar(in: NSApp.keyWindow)
+            onSelect(item, [])
+            isRowFocused = true
+            toggleExpand()
+        }) {
             Image(systemName: "chevron.right")
                 .font(.system(size: max(8, iconSize - 3), weight: .medium))
                 .foregroundStyle(AppColors.toolbarIcon)
@@ -229,7 +240,7 @@ struct FileSystemItemRow: View {
             selectRange: 0..<fileNameWithoutExtension.count,
             onCommit: { finishEditing() },
             onCancel: { cancelEditing() },
-            onFocusLost: { finishEditing() }
+            onFocusLost: { discardEditingIfConfirmed() }
         )
         .font(.system(size: textSize))
         .focused($isTextFieldFocused)
@@ -243,10 +254,12 @@ struct FileSystemItemRow: View {
             Button(action: { showNewFileDialog() }) {
                 Label(L10n.get("explorer.newFile"), systemImage: "doc.badge.plus")
             }
+            .keyboardShortcut(shortcuts.binding(for: .newFile)?.keyboardShortcut)
 
             Button(action: { showNewFolderDialog() }) {
                 Label(L10n.get("explorer.newFolder"), systemImage: "folder.badge.plus")
             }
+            .keyboardShortcut(shortcuts.binding(for: .newFolder)?.keyboardShortcut)
 
             Button { isShowingFolderOptions = true } label: {
                 Label(L10n.get("explorer.folderOptions"), systemImage: "slider.horizontal.3")
@@ -258,8 +271,18 @@ struct FileSystemItemRow: View {
         Button(action: { startEditing() }) {
             Label(L10n.get("explorer.rename"), systemImage: "pencil")
         }
+        .keyboardShortcut(shortcuts.binding(for: .renameItem)?.keyboardShortcut)
 
         Divider()
+
+        Button(action: { copyPath(relative: false) }) {
+            Label(L10n.get("shortcut.file.copyPath"), systemImage: "doc.on.doc")
+        }
+        .keyboardShortcut(shortcuts.binding(for: .copyPath)?.keyboardShortcut)
+        Button(action: { copyPath(relative: true) }) {
+            Label(L10n.get("shortcut.file.copyRelativePath"), systemImage: "doc.on.doc")
+        }
+        .keyboardShortcut(shortcuts.binding(for: .copyRelativePath)?.keyboardShortcut)
 
         Button(action: { revealInFinder() }) {
             Label(L10n.get("explorer.revealInFinder"), systemImage: "folder")
@@ -276,9 +299,16 @@ struct FileSystemItemRow: View {
         Button(role: .destructive, action: { showDeleteConfirmation() }) {
             Label(L10n.common.delete, systemImage: "trash")
         }
+        .keyboardShortcut(.delete, modifiers: .command)
     }
 
     // MARK: - Actions
+
+    private func copyPath(relative: Bool) {
+        guard let path = SidebarPathCopy.path(for: item.url, relativeTo: relative ? fileSystemManager.projectRoot?.url : nil) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+    }
 
     private func toggleExpand() {
         fileSystemManager.toggleExpand(item)
@@ -289,22 +319,44 @@ struct FileSystemItemRow: View {
         editingName = item.name
         isEditing = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            guard isEditing else { return }
             isTextFieldFocused = true
         }
     }
 
     private func finishEditing() {
+        guard isEditing else { return }
         let newName = editingName.trimmingCharacters(in: .whitespaces)
+        // Moving a file publishes tab/tree changes synchronously. Finish this session
+        // first so responder teardown or a late callback cannot move the old URL again.
+        isEditing = false
+        isTextFieldFocused = false
         if !newName.isEmpty && newName != item.name {
             if fileSystemManager.rename(item, to: newName) {
                 onCacheUpdate?()
             }
         }
-        isEditing = false
     }
 
     private func cancelEditing() {
         isEditing = false
+        isTextFieldFocused = false
+        editingName = item.name
+    }
+
+    private func discardEditingIfConfirmed() -> Bool {
+        guard isEditing else { return true }
+        if editingName != item.name {
+            let alert = NSAlert()
+            alert.messageText = L10n.get("explorer.discardRename.title")
+            alert.informativeText = L10n.get("explorer.discardRename.message")
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: L10n.get("explorer.discardRename.discard"))
+            alert.addButton(withTitle: L10n.common.cancel)
+            guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        }
+        cancelEditing()
+        return true
     }
 
     private func showNewFileDialog() {

@@ -101,3 +101,11 @@ ATX/Setext 제목, 중첩 강조·취소선, 인용문·목록·체크리스트,
 편집기는 파일 전환·전체 기본값 이벤트에서 합성한 값을 읽기만 한다. 툴바 전용 Binding의 setter에서 실제로 변경한 속성만 저장하며, 비동기 폰트 패널 콜백은 Binding 생성 시점의 파일 URL을 캡처한다. 따라서 다른 탭으로 바꾼 뒤 도착한 콜백이 새 탭에 재정의를 만들지 않는다. 툴바 우클릭의 전체 기본값 복원은 해당 파일의 모든 재정의를 제거한다.
 
 구형 프로젝트 공통 설정에는 변경 대상 파일 정보가 없으므로 모든 파일의 개별 재정의로 복제하지 않는다. 기존 JSON은 삭제하지 않고 보존하며, 재정의가 없는 파일은 전체 설정을 따른다. 레코드는 최초 조회 때만 읽고 캐시하며 실제로 값이 달라진 경우에만 저장한다. 저장 실패 시 메모리 설정도 적용하지 않고 오류를 표시한다. 손상/미래 형식 파일은 빈 데이터로 덮어쓰지 않는다. `tests/editor_appearance_regression.py`는 항목별 상속, 파일 격리, 재로드, 이름/폴더 이동, 복사, 초기화, 손상/저장 실패를 검증한다.
+
+## 네이티브 에디터의 책임 경계
+
+`NativeManuscriptView.swift`는 AppKit 입력과 하위 모듈의 연결을 맡는다. 같은 폴더의 `NativeManuscriptLineIndex`는 UTF-16 행 인덱스, `NativeManuscriptGeometry`는 읽기 전용 TextKit 좌표 조회, `NativeManuscriptCommands`는 명령 실행을 담당한다. `NativeManuscriptInlinePanel`은 인라인 패널의 소스 위치와 문단 여백, `NativeManuscriptHost`는 스크롤 호스트와 꼬리 공간, `NativeManuscriptRuler`는 줄 번호 표시를 소유한다. `NativeManuscriptFocus`는 사이드바 선택 후 비동기 문서 로딩이 포커스를 다시 가져오지 못하게 한다.
+
+서식 변경의 완료 순서는 `ManuscriptPresentationCoordinator` 하나가 소유한다: 속성 적용 → TextKit 재배치 → 화면 기준점 복원 → AppKit 선택/삽입 커서 갱신. `MarkdownPresentationController`는 구문 분석 캐시와 서식 속성만 결정한다. 커서를 먼저 갱신하고 이후 viewport를 이동하면 실제 `NSTextInsertionIndicator`가 이전 좌표에 남을 수 있으므로 이 순서를 분산시키지 않는다. 일반 도구의 기본 커서 보존과 별도로 표시 설정은 이 coordinator가 복원을 맡아 중복 복원을 피한다.
+
+`tests/native_cursor_regression.py`는 클릭/화살표 이동과 116행의 화면 높이 60% 유지 조건을 검증한다. 실제 깜빡이는 커서는 `tests/native_caret_ui.py --output /tmp/TextlinkCaretValidation.app`로 별도 검증 앱을 빌드해 클릭·스크롤·서식 전환하며 확인한다. 활성 창의 실제 `NSTextInsertionIndicator` 프레임을 먼저 읽고 TextKit 선택 segment와 비교하며 `/tmp/textlink-caret-validation.log`에 결과를 기록한다. 비활성 테스트 창의 논리 좌표 검사만으로 실제 커서 표시 성공을 판정하지 않는다.

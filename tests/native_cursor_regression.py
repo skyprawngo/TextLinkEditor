@@ -15,7 +15,7 @@ sources += [root / 'TextlinkEditor/Services/Core/EditorToolRegistry.swift']
 sources += markdown_sources
 sources += sorted((root / 'TextlinkEditor/Services/Editor/Scroll').glob('*.swift'))
 sources += [root / 'TextlinkEditor/Services/FileSystem/Workspace/WorkspaceFileEvents.swift']
-sources += [views / 'PreparedManuscript.swift', views / 'EditorToolBridge.swift', views / 'NativeManuscriptView.swift']
+sources += [views / 'PreparedManuscript.swift', views / 'EditorToolBridge.swift', *sorted(views.glob('NativeManuscript*.swift'))]
 prefix = (root / 'tests/editor_binding_regression.py').read_text().split("harness = r'''", 1)[1].split('final class Box', 1)[0]
 harness = r'''
 setbuf(stdout, nil)
@@ -115,6 +115,64 @@ for _ in 0..<40 {
 }
 precondition(crossedTop)
 print("PASS caret follows only across viewport boundaries")
+let savedSelection = view.selectedRange()
+EditorFocusCoordinator.claimSidebar(in: window)
+precondition(window.firstResponder !== view, "sidebar selection must resign manuscript focus")
+precondition(view.selectedRange() == savedSelection, "sidebar focus preserves caret offset")
+precondition(EditorFocusCoordinator.sidebarWindow === window)
+EditorFocusCoordinator.claimEditor(in: window)
+window.makeFirstResponder(view)
+view.load("# 큰 제목\n\n본문 한글 😀\n")
+view.applyDisplayStyle(EditorDisplayStyle(fontName: "SF Pro", fontSize: 16, lineHeightMultiple: 1, letterSpacing: 0))
+view.scrollCoordinator.cancel()
+host.contentView.setBoundsOrigin(.zero)
+settle()
+let caretRange = NSRange(location: 4, length: 0)
+view.setSelectedRange(caretRange)
+var plainRect = NSRect.zero
+for enabled in [false, true, false, true, false] {
+    view.setMarkdownRendering(enabled)
+    settle()
+    view.scrollCoordinator.cancel()
+    host.contentView.setBoundsOrigin(.zero)
+    settle()
+    let rect = view.firstRect(forCharacterRange: caretRange, actualRange: nil)
+    precondition(view.selectedRange() == caretRange, "format toggle must preserve source caret offset")
+    precondition(rect.height > 0 && rect.minY.isFinite, "caret geometry must remain valid")
+    if !enabled {
+        if plainRect != .zero { precondition(abs(rect.height - plainRect.height) < 1, "plain mode restores caret height") }
+        plainRect = rect
+    } else {
+        precondition(rect.height > plainRect.height, "formatted heading updates caret height immediately")
+    }
+}
+print("PASS sidebar resigns focus and formatting toggles update caret geometry without changing selection")
+view.setMarkdownRendering(false)
+let manuscript = (1...240).map { $0 % 3 == 0 ? "# 제목 \($0)" : "본문 \($0) 한글과 **강조**" }.joined(separator: "\n")
+view.load(manuscript)
+view.applyDisplayStyle(EditorDisplayStyle(fontName: "SF Pro", fontSize: 16, lineHeightMultiple: 1, letterSpacing: 0))
+let preservedCaret = NSRange(location: view.offset(line: 115, column: 3), length: 0)
+view.setSelectedRange(preservedCaret)
+view.scrollCoordinator.revealSelection()
+settle()
+view.scrollCoordinator.cancel()
+let targetY = host.contentSize.height * 0.6
+view.scrollCoordinator.restore(.init(offset: preservedCaret.location, screenY: targetY))
+view.needsLayout = true
+settle()
+view.scrollCoordinator.cancel()
+for enabled in [true, false, true, false] {
+    let before = view.lineRect(at: preservedCaret.location)!.minY + view.textContainerOrigin.y - host.contentView.bounds.minY
+    precondition(abs(before - targetY) < 1, "fixture cursor must start at 60 percent")
+    view.setMarkdownRendering(enabled)
+    settle()
+    let after = view.lineRect(at: preservedCaret.location)!.minY + view.textContainerOrigin.y - host.contentView.bounds.minY
+    precondition(view.selectedRange() == preservedCaret, "format toggle must keep line 116 and its column")
+    precondition(abs(after - before) < 1, "format toggle must keep the cursor at 60 percent of the viewport")
+    precondition(view.string == manuscript, "format toggle must preserve manuscript")
+}
+print("PASS repeated formatting toggles preserve line 116 at 60 percent of viewport")
+
 '''
 
 with tempfile.TemporaryDirectory(prefix='textlink-scroll-test-') as directory:

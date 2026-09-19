@@ -1,4 +1,7 @@
 {
+  "shortcut.file.copyPath": "パスをコピー",
+  "shortcut.file.copyRelativePath": "相対パスをコピー",
+  "shortcut.file.renameItem": "名前を変更",
   "ai.usage.current": "現在のコンテキスト",
   "ai.usage.compaction": "自動圧縮の基準",
   "ai.usage.compactionNote": "応答完了時の使用量です。Codexはモデルの有効上限の90%で自動圧縮します。基準が不明なプロバイダーや過去の記録では進捗を表示しません。",
@@ -441,6 +444,9 @@
   "folderOptions.icon.film": "映像",
   "explorer.newFolder": "新規フォルダ",
   "explorer.rename": "名前を変更",
+  "explorer.discardRename.title": "名前の変更を破棄しますか？",
+  "explorer.discardRename.message": "入力した名前を破棄し、元の名前を維持します。",
+  "explorer.discardRename.discard": "変更を破棄",
   "explorer.delete": "削除",
   "explorer.refresh": "更新",
   "explorer.revealInFinder": "Finderで表示",

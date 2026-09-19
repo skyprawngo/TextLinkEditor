@@ -2,8 +2,8 @@ import AppKit
 
 /// Owns scroll geometry, anchor selection and restoration for every editor feature.
 final class EditorScrollCoordinator {
-    enum Policy { case preserveViewport, followCursor }
-    enum Event { case markdownRendering, appearanceChange, externalTextChange }
+    enum Policy { case preserveViewport, followCursor, preserveVisibleCursor }
+    enum Event { case markdownRendering, markdownModeChange, appearanceChange, externalTextChange }
     struct Anchor { let offset: Int; let screenY: CGFloat }
     struct ResizeAnchor { let location: any NSTextLocation; let offset: CGFloat }
     private weak var editor: NativeManuscriptTextView?
@@ -14,6 +14,7 @@ final class EditorScrollCoordinator {
     func capture(for event: Event) -> Anchor? {
         switch event {
         case .markdownRendering, .externalTextChange: return capture(.preserveViewport)
+        case .markdownModeChange: return capture(.preserveVisibleCursor)
         case .appearanceChange: return capture(.followCursor)
         }
     }
@@ -40,17 +41,13 @@ final class EditorScrollCoordinator {
         case .followCursor:
             let offset = editor.selectedRange().location
             if let pending, pending.offset == offset { return pending }
-            guard let manager = editor.textLayoutManager, let location = editor.textLocation(at: offset) else { return nil }
-            if let viewport = manager.textViewportLayoutController.viewportRange,
-               location.compare(viewport.location) != .orderedAscending,
-               location.compare(viewport.endLocation) != .orderedDescending,
-               let rect = editor.lineRect(at: offset) {
-                let y = rect.minY + editor.textContainerOrigin.y - scroll.contentView.bounds.minY
-                if y >= 0, y + rect.height <= scroll.contentSize.height { return Anchor(offset: offset, screenY: y) }
-            }
+            if let anchor = visibleCursorAnchor() { return anchor }
             let anchor = Anchor(offset: offset, screenY: 0)
             restore(anchor)
             return anchor
+        case .preserveVisibleCursor:
+            if let pending, pending.offset == editor.selectedRange().location { return pending }
+            return visibleCursorAnchor() ?? capture(.preserveViewport)
         case .preserveViewport:
             if let pending { return pending }
             let point = NSPoint(x: editor.textContainerOrigin.x + (editor.textContainer?.lineFragmentPadding ?? 0),
@@ -59,6 +56,19 @@ final class EditorScrollCoordinator {
             guard let rect = editor.lineRect(at: offset) else { return nil }
             return Anchor(offset: offset, screenY: rect.minY + editor.textContainerOrigin.y - scroll.contentView.bounds.minY)
         }
+    }
+
+    private func visibleCursorAnchor() -> Anchor? {
+        guard let editor, let scroll = editor.enclosingScrollView,
+              let manager = editor.textLayoutManager,
+              let location = editor.textLocation(at: editor.selectedRange().location),
+              let viewport = manager.textViewportLayoutController.viewportRange,
+              location.compare(viewport.location) != .orderedAscending,
+              location.compare(viewport.endLocation) != .orderedDescending,
+              let rect = editor.lineRect(at: editor.selectedRange().location) else { return nil }
+        let y = rect.minY + editor.textContainerOrigin.y - scroll.contentView.bounds.minY
+        guard y >= 0, y + rect.height <= scroll.contentSize.height else { return nil }
+        return Anchor(offset: editor.selectedRange().location, screenY: y)
     }
 
     func restore(_ anchor: Anchor) {

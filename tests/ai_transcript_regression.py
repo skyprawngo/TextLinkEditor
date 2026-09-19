@@ -80,6 +80,35 @@ struct TestView: View {
 }
 @main struct Test {
     @MainActor static func main() {
+        let bubbleView = TranscriptTextView()
+        for width: CGFloat in [320, 500, 240] {
+            bubbleView.setFrameSize(NSSize(width: width, height: 600))
+            for message in ["짧은 입력", "첫 줄\n둘", String(repeating: "긴 사용자 입력 😀 ", count: 40)] {
+                let entry = AITranscriptScrollView.Entry(id: UUID(), text: message, isUser: true, tag: nil, revisionTitle: nil)
+                let style = NSMutableParagraphStyle()
+                style.alignment = .left
+                let text = NSAttributedString(string: message + "\n", attributes: [.font: NSFont.systemFont(ofSize: 14), .paragraphStyle: style])
+                bubbleView.replace(text, records: [.init(range: NSRange(location: 0, length: text.length), entry: entry)], processingOffset: nil)
+                let manager = bubbleView.layoutManager!
+                let container = bubbleView.textContainer!
+                manager.ensureLayout(for: container)
+                var starts: [CGFloat] = []
+                let range = manager.glyphRange(for: container)
+                manager.enumerateLineFragments(forGlyphRange: range) { rect, used, _, _, _ in
+                    starts.append(rect.minX)
+                    precondition(used.maxX <= container.size.width - 11, "text must stay inside bubble padding")
+                }
+                let column = manager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil)
+                precondition(abs(column.maxX + 12 - container.size.width) < 1, "bubble must be right aligned")
+                precondition(column.width + 24 <= container.size.width * 0.9 + 1, "bubble must retain visible left margin")
+                precondition(starts.allSatisfy { abs($0 - column.minX) < 1 }, "wrapped lines must share a left edge")
+                if message == "짧은 입력" {
+                    precondition(column.width < container.size.width * 0.5, "short messages must fit their text")
+                }
+                precondition(bubbleView.string == text.string, "bubble layout must preserve copyable text")
+            }
+        }
+        print("PASS short, multiline and wrapped user bubbles fit text, align right and preserve left aligned text")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let folder = root.appendingPathComponent("설정")
         try! FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

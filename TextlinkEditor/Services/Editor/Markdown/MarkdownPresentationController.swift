@@ -13,10 +13,10 @@ final class MarkdownPresentationController {
         guard rendersMarkdown != enabled else { return }
         editor.commitComposition()
         rendersMarkdown = enabled
-        refresh(editor: editor, style: style, generation: generation, reset: true)
+        refresh(editor: editor, style: style, generation: generation, reset: true, preservingCursor: true)
     }
 
-    func refresh(editor: NativeManuscriptTextView, style: EditorDisplayStyle?, generation: Int, reset: Bool = false, trackingSelection: Bool = false) {
+    func refresh(editor: NativeManuscriptTextView, style: EditorDisplayStyle?, generation: Int, reset: Bool = false, trackingSelection: Bool = false, preservingCursor: Bool = false) {
         guard (rendersMarkdown || reset), !applyingMarkdown, !editor.hasMarkedText(),
               let storage = editor.textStorage, let style else { return }
         let contentKey = "\(generation)|\(style.key)|\(rendersMarkdown)"
@@ -32,22 +32,23 @@ final class MarkdownPresentationController {
         renderedContentKey = contentKey
         applyingMarkdown = true
         defer { applyingMarkdown = false }
-        let anchor = editor.scrollCoordinator.capture(for: .markdownRendering)
-        storage.beginEditing()
-        let whole = NSRange(location: 0, length: storage.length)
-        storage.addAttributes(style.changedAttributes(from: nil), range: whole)
-        for key in MarkdownSourceStyling.ownedKeys { storage.removeAttribute(key, range: whole) }
-        if rendersMarkdown {
-            if parsedGeneration != generation || parsedDocument == nil {
-                parsedDocument = MarkdownSyntaxDocument(source: storage.string)
-                parsedGeneration = generation
+        editor.presentationCoordinator.perform(for: preservingCursor ? .markdownModeChange : .markdownRendering) {
+            storage.beginEditing()
+            let whole = NSRange(location: 0, length: storage.length)
+            storage.addAttributes(style.changedAttributes(from: nil), range: whole)
+            for key in MarkdownSourceStyling.ownedKeys { storage.removeAttribute(key, range: whole) }
+            if rendersMarkdown {
+                if parsedGeneration != generation || parsedDocument == nil {
+                    parsedDocument = MarkdownSyntaxDocument(source: storage.string)
+                    parsedGeneration = generation
+                }
+                MarkdownSourceStyling.apply(to: storage, selection: editor.selectedRange(),
+                    font: NSFont(name: style.fontName, size: style.fontSize) ?? .systemFont(ofSize: style.fontSize), document: parsedDocument)
             }
-            MarkdownSourceStyling.apply(to: storage, selection: editor.selectedRange(),
-                font: NSFont(name: style.fontName, size: style.fontSize) ?? .systemFont(ofSize: style.fontSize), document: parsedDocument)
+            storage.endEditing()
+            editor.typingAttributes = style.changedAttributes(from: nil)
         }
-        storage.endEditing()
-        editor.typingAttributes = style.changedAttributes(from: nil)
-        if let anchor { editor.scrollCoordinator.restore(anchor) }
     }
+
     func invalidate() { markdownRenderKey = nil; renderedContentKey = nil; parsedGeneration = nil; parsedDocument = nil }
 }

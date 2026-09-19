@@ -15,7 +15,7 @@ sources += [root / 'TextlinkEditor/Services/Core/EditorToolRegistry.swift']
 sources += markdown_sources
 sources += sorted((root / 'TextlinkEditor/Services/Editor/Scroll').glob('*.swift'))
 sources += [root / 'TextlinkEditor/Services/FileSystem/Workspace/WorkspaceFileEvents.swift']
-sources += [views / 'PreparedManuscript.swift', views / 'EditorToolBridge.swift', views / 'NativeManuscriptView.swift']
+sources += [views / 'PreparedManuscript.swift', views / 'EditorToolBridge.swift', *sorted(views.glob('NativeManuscript*.swift'))]
 prefix = (root / 'tests/editor_binding_regression.py').read_text().split("harness = r'''", 1)[1].split('final class Box', 1)[0]
 harness = r'''
 setbuf(stdout, nil)

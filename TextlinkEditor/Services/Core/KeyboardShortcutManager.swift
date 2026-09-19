@@ -21,6 +21,9 @@ struct ShortcutAction: RawRepresentable, Hashable, Identifiable, Codable {
         try container.encode(rawValue)
     }
     static let newFile = Self(rawValue: "file.new")
+    static let copyPath = Self(rawValue: "file.copyPath")
+    static let copyRelativePath = Self(rawValue: "file.copyRelativePath")
+    static let renameItem = Self(rawValue: "file.renameItem")
     static let newFolder = Self(rawValue: "file.newFolder")
     static let openFile = Self(rawValue: "file.open")
     static let save = Self(rawValue: "file.save")
@@ -249,6 +252,10 @@ final class KeyboardShortcutManager {
             ShortcutBinding(action: .closeTab, key: "w", modifiers: .command, isEnabled: true),
             ShortcutBinding(action: .closeAllTabs, key: "w", modifiers: [.command, .option], isEnabled: true),
 
+            ShortcutBinding(action: .copyPath, key: "c", modifiers: [.command, .option, .shift], isEnabled: true),
+            ShortcutBinding(action: .copyRelativePath, key: "c", modifiers: [.command, .option], isEnabled: true),
+            ShortcutBinding(action: .renameItem, key: "return", modifiers: [], isEnabled: true),
+
             // 편집
             ShortcutBinding(action: .undo, key: "z", modifiers: .command, isEnabled: true),
             ShortcutBinding(action: .redo, key: "z", modifiers: [.command, .shift], isEnabled: true),
@@ -322,6 +329,22 @@ final class KeyboardShortcutManager {
                 let decoder = JSONDecoder()
                 bindings = try decoder.decode([ShortcutBinding].self, from: data)
 
+                // Migrate the previous default pair together, without overwriting custom keys.
+                if let absolute = bindings.firstIndex(where: { $0.action == .copyPath }),
+                   let relative = bindings.firstIndex(where: { $0.action == .copyRelativePath }),
+                   bindings[absolute].key == "c", bindings[absolute].modifiers == [.command, .option],
+                   bindings[relative].key == "c", bindings[relative].modifiers == [.command, .option, .shift] {
+                    bindings[absolute].modifiers = [.command, .option, .shift]
+                    bindings[relative].modifiers = [.command, .option]
+                }
+                for index in bindings.indices where bindings[index].action == .copyPath || bindings[index].action == .copyRelativePath {
+                    let old: ModifierKeys = bindings[index].action == .copyPath ? [.control, .option] : [.control, .option, .shift]
+                    let updated: ModifierKeys = bindings[index].action == .copyPath ? [.command, .option, .shift] : [.command, .option]
+                    if bindings[index].key == "c", bindings[index].modifiers == old,
+                       findConflict(key: "c", modifiers: updated, excluding: bindings[index].action) == nil {
+                        bindings[index].modifiers = updated
+                    }
+                }
                 mergeRegisteredTools()
             } catch {
                 print("Failed to load shortcuts: \(error)")

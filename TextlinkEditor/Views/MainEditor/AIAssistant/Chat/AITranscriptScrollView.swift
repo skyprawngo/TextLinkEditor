@@ -73,9 +73,10 @@ struct AITranscriptScrollView: NSViewRepresentable {
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineSpacing = lineSpacing
             paragraph.paragraphSpacing = 0
-            paragraph.headIndent = entry.isUser ? 12 : 0
+            paragraph.headIndent = 0
             paragraph.firstLineHeadIndent = paragraph.headIndent
-            paragraph.tailIndent = entry.isUser ? -12 : 0
+            paragraph.tailIndent = 0
+            if entry.isUser { paragraph.alignment = .left }
             let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor,
                 .kern: letterSpacing, .paragraphStyle: paragraph]
             if let tag = entry.tag {
@@ -182,6 +183,30 @@ final class TranscriptScrollView: NSScrollView {
     }
 }
 
+/// Narrow the whole message column while keeping its paragraphs left aligned.
+private final class TranscriptTextContainer: NSTextContainer {
+    var userMessages: [(range: NSRange, naturalWidth: CGFloat)] = []
+    override var isSimpleRectangularTextContainer: Bool { false }
+
+    func bubbleBounds(at offset: Int) -> (x: CGFloat, width: CGFloat)? {
+        guard let message = userMessages.first(where: { NSLocationInRange(offset, $0.range) }) else { return nil }
+        let width = min(max(24, ceil(message.naturalWidth) + 24), size.width * 0.9)
+        return (size.width - width, width)
+    }
+
+    override func lineFragmentRect(forProposedRect proposedRect: NSRect, at characterIndex: Int,
+                                   writingDirection baseWritingDirection: NSWritingDirection,
+                                   remaining remainingRect: UnsafeMutablePointer<NSRect>?) -> NSRect {
+        var rect = super.lineFragmentRect(forProposedRect: proposedRect, at: characterIndex,
+                                          writingDirection: baseWritingDirection, remaining: remainingRect)
+        if let bubble = bubbleBounds(at: characterIndex) {
+            rect.origin.x = bubble.x + 12
+            rect.size.width = max(1, bubble.width - 24)
+        }
+        return rect
+    }
+}
+
 /// Anchors the last visible text line by UTF-16 offset, not total content height.
 final class TranscriptTextView: NSTextView, NSTextViewDelegate {
     struct Record { let range: NSRange; let entry: AITranscriptScrollView.Entry }
@@ -210,7 +235,7 @@ final class TranscriptTextView: NSTextView, NSTextViewDelegate {
         let content = NSTextStorage()
         let manager = NSLayoutManager()
         content.addLayoutManager(manager)
-        let container = NSTextContainer(size: NSSize(width: 320, height: CGFloat.greatestFiniteMagnitude))
+        let container = TranscriptTextContainer(size: NSSize(width: 320, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true
         manager.addTextContainer(container)
         super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 1), textContainer: container)
@@ -238,6 +263,13 @@ final class TranscriptTextView: NSTextView, NSTextViewDelegate {
         self.records = records
         self.processingOffset = processingOffset
         if processingOffset != nil { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
+        if let container = textContainer as? TranscriptTextContainer {
+            container.userMessages = records.filter { $0.entry.isUser }.map { record in
+                let measured = NSMutableAttributedString(attributedString: text.attributedSubstring(from: record.range))
+                measured.removeAttribute(.paragraphStyle, range: NSRange(location: 0, length: measured.length))
+                return (record.range, measured.size().width)
+            }
+        }
         textStorage?.setAttributedString(text)
         if NSMaxRange(selection) <= text.length { setSelectedRange(selection) }
         needsDisplay = true
@@ -284,8 +316,9 @@ final class TranscriptTextView: NSTextView, NSTextViewDelegate {
             let glyphs = manager.glyphRange(forCharacterRange: record.range, actualCharacterRange: nil)
             var frame = manager.boundingRect(forGlyphRange: glyphs, in: container)
                 .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
-            frame.origin.x = textContainerOrigin.x
-            frame.size.width = max(0, bounds.width - 2 * textContainerOrigin.x)
+            guard let bubble = (container as? TranscriptTextContainer)?.bubbleBounds(at: record.range.location) else { continue }
+            frame.origin.x = textContainerOrigin.x + bubble.x
+            frame.size.width = bubble.width
             NSBezierPath(roundedRect: frame.insetBy(dx: 0, dy: -6), xRadius: 12, yRadius: 12).fill()
             if let tag = record.entry.tag, !tag.isEmpty {
                 let tagRange = NSRange(location: record.range.location, length: tag.utf16.count)

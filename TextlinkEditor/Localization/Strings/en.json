@@ -1,4 +1,7 @@
 {
+  "shortcut.file.copyPath": "Copy Path",
+  "shortcut.file.copyRelativePath": "Copy Relative Path",
+  "shortcut.file.renameItem": "Rename",
   "ai.usage.current": "Current context",
   "ai.usage.compaction": "Auto-compaction threshold",
   "ai.usage.compactionNote": "Measured after each response. Codex uses 90% of the model’s effective window for auto-compaction. Progress is unavailable for providers or older records without a known threshold.",
@@ -441,6 +444,9 @@
   "folderOptions.icon.film": "Film",
   "explorer.newFolder": "New Folder",
   "explorer.rename": "Rename",
+  "explorer.discardRename.title": "Discard name changes?",
+  "explorer.discardRename.message": "The entered name will be discarded and the original name kept.",
+  "explorer.discardRename.discard": "Discard Changes",
   "explorer.delete": "Delete",
   "explorer.refresh": "Refresh",
   "explorer.revealInFinder": "Reveal in Finder",

@@ -32,7 +32,10 @@ struct TabBarView: View {
                                         count: tabManager.tabs.count, selected: tabManager.selectedTabIndex == index),
                                     isDragging: draggingTabId == tab.id,
                                     isDragOver: dragOverTabId == tab.id,
-                                    onSelect: { tabManager.selectTab(at: index) },
+                                    onSelect: {
+                                        EditorFocusCoordinator.claimEditor(in: NSApp.keyWindow)
+                                        tabManager.selectTab(at: index)
+                                    },
                                     onClose: { tabManager.closeTab(at: index) },
                                     onRename: { name in
                                         guard let current = tabManager.tabs.first(where: { $0.id == tab.id }), current.fileExists else { return false }

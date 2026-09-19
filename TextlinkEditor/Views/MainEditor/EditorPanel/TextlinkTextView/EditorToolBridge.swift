@@ -31,7 +31,7 @@ final class EditorToolBridge {
 
     init(editor: NativeManuscriptTextView) { self.editor = editor }
 
-    func perform(_ tool: EditorToolDescriptor, operation: () -> Bool) {
+    func perform(_ tool: EditorToolDescriptor, preservesCursor: Bool = true, operation: () -> Bool) {
         precondition(Thread.isMainThread)
         let id = UUID()
         let nested = executing
@@ -44,7 +44,7 @@ final class EditorToolBridge {
         }
         if tool.effects.contains(.text) || tool.effects.contains(.selection) { editor.commitComposition() }
         // Opening a tool UI is not a layout mutation and must never reveal the caret.
-        let anchor = tool.category == .presentation && tool.effects.contains(.layout)
+        let anchor = preservesCursor && tool.category == .presentation && tool.effects.contains(.layout)
             ? editor.scrollCoordinator.capture(for: .appearanceChange) : nil
         let changed = operation()
         emit(id, tool, .applied, changed ? .applied : .unchanged)

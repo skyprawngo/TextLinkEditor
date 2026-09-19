@@ -297,7 +297,9 @@ struct TextlinkEditorRepresentable: NSViewRepresentable {
                 guard let self, self.parent.isSourceVisible, self.documentID == id, self.contentRevision == revision,
                       self.parent.isDocumentActive?(id, self.documentURL, revision) ?? true,
                       let native = self.host?.textView else { return }
-                native.window?.makeFirstResponder(native)
+                if EditorFocusCoordinator.permitsAutomaticFocus(in: native.window) {
+                    native.window?.makeFirstResponder(native)
+                }
                 if scrollToSelection && !self.restoreViewport() { native.scrollCoordinator.revealSelection() }
                 self.viewportReady = self.parent.isEditable
                 self.publishSelection()

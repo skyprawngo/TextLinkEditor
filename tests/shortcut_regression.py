@@ -10,6 +10,7 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 source = (root / 'TextlinkEditor/Services/Core/KeyboardShortcutManager.swift').read_text()
+source += '\n' + (root / 'TextlinkEditor/Services/FileSystem/SidebarPathCopy.swift').read_text()
 start = source.index('    private var shortcutsFileURL: URL {')
 end = source.index('    private var registrationObserver', start)
 source = source[:start] + '''    private var shortcutsFileURL: URL {
@@ -32,7 +33,33 @@ func event(_ code: UInt16, _ text: String = "", _ modifiers: NSEvent.ModifierFla
                     windowNumber: 0, context: nil, characters: text, charactersIgnoringModifiers: text,
                     isARepeat: false, keyCode: code)!
 }
+let project = URL(fileURLWithPath: "/tmp/작품.weaveproj")
+let file = project.appendingPathComponent("원고/첫 장.md")
+expect(SidebarPathCopy.path(for: file, relativeTo: nil) == "/tmp/작품.weaveproj/원고/첫 장.md", "absolute path preserves Korean and spaces")
+expect(SidebarPathCopy.path(for: file, relativeTo: project) == "원고/첫 장.md", "relative path starts at project root")
+expect(SidebarPathCopy.path(for: project.appendingPathComponent("원고"), relativeTo: project) == "원고", "folder relative path")
+expect(SidebarPathCopy.path(for: project, relativeTo: project) == ".", "project root relative path")
+expect(SidebarPathCopy.path(for: URL(fileURLWithPath: "/tmp/작품.weaveproj-other/file"), relativeTo: project) == nil, "sibling prefix cannot masquerade as project child")
 let manager = KeyboardShortcutManager.shared
+expect(manager.action(matching: event(8, "c", [.command, .option, .shift])) == .copyPath, "copy path default")
+expect(manager.action(matching: event(8, "C", [.command, .option])) == .copyRelativePath, "relative path default")
+expect(manager.action(matching: event(36, "\r")) == .renameItem, "sidebar rename default")
+manager.setKey("c", modifiers: [.control, .option], for: .copyPath)
+manager.loadShortcuts()
+expect(manager.action(matching: event(8, "c", [.command, .option, .shift])) == .copyPath, "previous path shortcut migrates to command")
+manager.setKey("p", modifiers: [.command, .shift], for: .copyPath)
+manager.loadShortcuts()
+expect(manager.action(matching: event(35, "p", [.command, .shift])) == .copyPath, "custom path shortcut survives migration")
+manager.resetToDefault(for: .copyPath)
+manager.setKey("c", modifiers: [.command, .option], for: .copyPath)
+manager.setKey("c", modifiers: [.command, .option, .shift], for: .copyRelativePath)
+manager.loadShortcuts()
+expect(manager.action(matching: event(8, "c", [.command, .option])) == .copyRelativePath, "previous command defaults swap together")
+manager.loadShortcuts()
+expect(manager.action(matching: event(8, "c", [.command, .option, .shift])) == .copyPath, "swapped defaults remain stable on reload")
+
+
+
 expect(manager.action(matching: event(126, "\u{f700}", [.option, .function, .numericPad])) == .moveLineUp, "default option up with system flags")
 expect(manager.action(matching: event(125, "\u{f701}", .option)) == .moveLineDown, "default option down")
 expect(manager.action(matching: event(126, "\u{f700}", [.option, .shift])) == .duplicateLineUp, "shift selects duplicate")
