@@ -15,7 +15,7 @@ struct EditorToolDescriptor {
 }
 
 final class EditorToolBridge {
-    enum Phase { case began, applied, viewportLaidOut, ended }
+    enum Phase { case began, validated, applied, viewportLaidOut, ended }
     enum Outcome { case applied, unchanged, cancelled }
     struct Event {
         let id: UUID
@@ -31,17 +31,18 @@ final class EditorToolBridge {
 
     init(editor: NativeManuscriptTextView) { self.editor = editor }
 
-    func perform(_ tool: EditorToolDescriptor, preservesCursor: Bool = true, operation: () -> Bool) {
+    func perform(_ tool: EditorToolDescriptor, preservesCursor: Bool = true, isAvailable: Bool = true, operation: () -> Bool) {
         precondition(Thread.isMainThread)
         let id = UUID()
         let nested = executing
         executing = true
         defer { executing = nested }
         emit(id, tool, .began, .applied)
-        guard !nested, let editor, !tool.effects.contains(.text) || editor.isEditable else {
+        guard !nested, isAvailable, let editor, !tool.effects.contains(.text) || editor.isEditable else {
             emit(id, tool, .ended, .cancelled)
             return
         }
+        emit(id, tool, .validated, .applied)
         if tool.effects.contains(.text) || tool.effects.contains(.selection) { editor.commitComposition() }
         // Opening a tool UI is not a layout mutation and must never reveal the caret.
         let anchor = preservesCursor && tool.category == .presentation && tool.effects.contains(.layout)

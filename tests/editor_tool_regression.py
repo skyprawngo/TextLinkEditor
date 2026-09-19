@@ -78,7 +78,7 @@ view.setMarkdownRendering(false)
 var events: [EditorToolBridge.Event] = []
 view.toolBridge.onEvent = { events.append($0) }
 func verifyCompleted(_ name: String) {
-    expect(events.map(\.phase) == [.began, .applied, .viewportLaidOut, .ended], "\(name) shares the full layout lifecycle")
+    expect(events.map(\.phase) == [.began, .validated, .applied, .viewportLaidOut, .ended], "\(name) shares the full layout lifecycle")
     expect(Set(events.map(\.id)).count == 1 && events.last?.outcome == .applied, "\(name) completes one identified operation")
     events.removeAll()
 }
@@ -184,7 +184,7 @@ for (type, prefix) in [(MarkdownFormatType.bold, "**"), (.italic, "*"), (.underl
 view.setSelectedRange(NSRange(location: 0, length: 0))
 events.removeAll()
 view.execute(EditorCommand(.format(.bold)))
-expect(events.map(\.phase) == [.began, .applied, .ended] && events.last?.outcome == .unchanged, "empty selection finishes without scheduling layout")
+expect(events.map(\.phase) == [.began, .validated, .applied, .ended] && events.last?.outcome == .unchanged, "empty selection finishes without scheduling layout")
 view.isEditable = false
 events.removeAll()
 view.execute(EditorCommand(.replace("한글", replacement: "changed", all: true)))
@@ -194,7 +194,7 @@ var drafts = 0
 let draftObserver = NotificationCenter.default.addObserver(forName: Notification.Name("aiDraftAction"), object: nil, queue: nil) { _ in drafts += 1 }
 events.removeAll()
 view.execute(EditorCommand(.assistantDraft("test request")))
-expect(drafts == 1 && events.map(\.phase) == [.began, .applied, .ended], "assistant dispatch shares lifecycle without reflow")
+expect(drafts == 1 && events.map(\.phase) == [.began, .validated, .applied, .ended], "assistant dispatch shares lifecycle without reflow")
 NotificationCenter.default.removeObserver(draftObserver)
 events.removeAll()
 let custom = EditorToolDescriptor(name: "futureTool", category: .presentation, effects: [.layout])

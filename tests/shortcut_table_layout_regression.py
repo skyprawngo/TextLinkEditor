@@ -3,9 +3,9 @@
 from pathlib import Path
 import subprocess,tempfile
 root=Path(__file__).resolve().parents[1]
-s=(root/'TextlinkEditor/Views/SettingsView.swift').read_text()
-view=s[s.index('struct ShortcutsSettingsView:'):s.index('// MARK: - Shortcut Edit Sheet')]
-manager=(root/'TextlinkEditor/Services/Core/KeyboardShortcutManager.swift').read_text()
+s=(root/'TextlinkEditor/Views/Settings/ShortcutsSettingsView.swift').read_text()
+view=s[s.index('struct ShortcutsSettingsView:'):len(s)]
+manager=(root/'TextlinkEditor/Services/Core/KeyboardShortcutManager.swift').read_text() + '\n' + (root / 'TextlinkEditor/Services/Core/Shortcuts/ShortcutModels.swift').read_text()
 a=manager.index('    private var shortcutsFileURL: URL {'); b=manager.index('    private var registrationObserver',a)
 manager=manager[:a]+'''    private var shortcutsFileURL: URL { URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("keys.json") }
 '''+manager[b:]

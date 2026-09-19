@@ -49,8 +49,7 @@ final class EditorTabManager: WorkspaceDocumentParticipant {
     private var isSavingSession = false
     private var sessionProjectURL: URL?
     @ObservationIgnored private var recoveryWork: DispatchWorkItem?
-    @ObservationIgnored private let recoveryQueue = DispatchQueue(label: "TextlinkEditor.recovery", qos: .utility)
-    @ObservationIgnored private var recoveryGeneration = 0
+    @ObservationIgnored private let recoveryWriter = EditorRecoveryWriter()
     var saveErrors: [URL: String] = [:]
     var lastSavedAt: [URL: Date] = [:]
     var recoveryError: String?
@@ -682,8 +681,6 @@ final class EditorTabManager: WorkspaceDocumentParticipant {
         let selectedURL = selectedTab?.url
         let portableIndex = portableTabs.firstIndex { projectURL.appendingPathComponent($0.relativePath) == selectedURL } ?? 0
         let portable = EditorSessionState(tabs: portableTabs, selectedTabIndex: portableIndex)
-        recoveryGeneration &+= 1
-        let generation = recoveryGeneration
         // Immutable snapshots cross the queue; AppKit and observable state stay on main.
         let write: () -> String? = {
             do {
@@ -691,17 +688,8 @@ final class EditorTabManager: WorkspaceDocumentParticipant {
                 return nil
             } catch { return error.localizedDescription }
         }
-        if asynchronously {
-            recoveryQueue.async { [weak self] in
-                let error = write()
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, self.recoveryGeneration == generation else { return }
-                    self.recoveryError = error
-                }
-            }
-        } else {
-            // Explicit save/close retains durability and cannot be overtaken by an older autosave.
-            recoveryError = recoveryQueue.sync(execute: write)
+        recoveryWriter.write(asynchronously: asynchronously, operation: write) { [weak self] error in
+            self?.recoveryError = error
         }
     }
 
@@ -709,8 +697,7 @@ final class EditorTabManager: WorkspaceDocumentParticipant {
     func restoreSession(from projectURL: URL) {
         stopDiskMonitoring()
         recoveryWork?.cancel()
-        recoveryQueue.sync {}
-        recoveryGeneration &+= 1
+        recoveryWriter.invalidateAndWait()
         isSavingSession = true
         defer { isSavingSession = false }
         sessionProjectURL = projectURL

@@ -13,3 +13,7 @@ AppKit 입력의 IME 조합 중 문자열 전체 교체는 조합을 깨뜨릴 �
 프로젝트 검색의 바꾸기 버튼은 `MainEditor/ProjectReplaceView.swift`를 연다. AI 첨부의 명시적 참조 화면과 응답의 수정 비교 화면은 각각 `AIAssistant/Context/`, `AIAssistant/Revision/`에 있다.
 
 AI 대화의 스크롤 영역과 입력 프레임은 `AIChatView`의 별도 수직 영역이다. 두 영역 사이에는 -24pt 간격을 두어 입력창 상단 뒤로만 대화가 12pt 겹친다. 입력창은 위에 그리며, 대화 영역이 입력창 하단 여백까지 확장되지 않도록 한다. `AITranscriptScrollView.swift`는 읽기 전용 AppKit 대화 본문과 메시지 액션을 담당하며, 폭 변경 때 attributed text를 다시 생성하지 않는다. 원고의 TextKit 2 엔진과 달리 이 대화 뷰는 `NSLayoutManager`를 사용한다. `TranscriptScrollView`가 입력창 바로 위 문자의 UTF-16 위치와 하단 거리로 resize 앵커를 유지하고, 한 run-loop의 변경을 모아 SwiftUI 레이아웃 이후 복원한다. 패널 드래그 상태는 `aiPanelIsResizing` 환경값으로 전달한다. `tests/ai_transcript_regression.py`에서 재배치 중 동일 문자 위치, 입력 프레임과의 영역 분리, 선택·수정안 액션과 유휴 상태를 검증한다.
+
+`MainEditor/AppCommandHandler`는 앱 명령 연결, `ToolbarSearchField`는 네이티브 검색 입력을 담당한다. `SettingsView`는 설정 탐색을 구성하며 각 페이지와 단축키 편집은 `Settings/`에 있다. AI 대화의 네이티브 입력은 `Chat/MultiLineInputView`, 선택지는 `SelectionInputView`, 대화 표시 경계는 `AIChatTranscript`에서 관리한다. 전체 책임 지도는 `docs/architecture.md`를 참고한다.
+
+프로젝트 연결/해제는 `MainEditorView` 한 곳에서 관리한다. AI 자식 컨테이너는 화면 생명주기로 프로젝트나 로그인 상태를 초기화하지 않는다. 패널 폭/드래그/표시 수명과 리사이즈 환경값은 `MainEditor/Layout`에, 자동 포커스 허용 정책은 `EditorFocusCoordinator`에 있다.

@@ -102,7 +102,7 @@ struct TextlinkEditorCommands: Commands {
         CommandMenu(L10n.get("toolbar.format")) {
             ForEach(EditorToolRegistry.tools) { tool in
                 Button(L10n.get(tool.titleKey)) {
-                    NotificationCenter.default.post(name: Notification.Name("executeEditorTool"), object: tool.id)
+                    EditorToolRegistry.requestExecution(tool.id)
                 }
                 .configuredShortcut(ShortcutAction(rawValue: tool.id))
             }

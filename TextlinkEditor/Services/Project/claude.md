@@ -21,3 +21,5 @@ MyProject/
 `ProjectSidebarLayout`은 변경 사항·그래프의 펼친 본문 높이를 `sidebar-layout.json`에 저장한다. 드래그 종료 때 원자적으로 저장하고 프로젝트 전환 때 복원한다. 창 높이에 따른 일시적인 표시 제한과 접힘 상태는 저장된 높이를 덮어쓰지 않는다.
 
 열기·닫기는 bookmark 접근, 최근/마지막 프로젝트와 연결된다. `openProjectFromFile`, `openProject`, `closeProject`와 메인 화면의 탭/AI 전환 호출을 함께 추적한다. `deleteProject`처럼 UI 이름과 다른 의미를 가질 수 있는 작업은 구현에서 실제 파일 삭제 여부를 확인한다.
+
+최근 프로젝트와 bookmark의 UserDefaults 저장은 `ProjectPreferencesStore`에 분리되어 있다. `ProjectManager`는 목록의 표시 상태와 프로젝트 전환 순서를 소유한다. 기존 저장 키와 JSON 형식은 유지하며 테스트에서는 별도 UserDefaults를 주입한다.

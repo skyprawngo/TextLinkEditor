@@ -2,6 +2,8 @@
 
 TextlinkEditor는 `.weaveproj` 폴더 안에 원고와 창작 자료를 저장하는 macOS 앱이다. SwiftUI 화면과 AppKit 네이티브 원고 에디터를 사용한다. 이전 Core Text 엔진은 회귀 비교용으로 남아 있다. 앱 타깃의 최소 OS는 macOS 26.0이며, 실제 빌드 설정은 `TextlinkEditor.xcodeproj/project.pbxproj`가 기준이다.
 
+앱 전체의 책임 분류와 의존성 경계는 [구조 문서](docs/architecture.md)에 있다.
+
 ## 기능별 진입점
 
 필요한 영역의 맥락만 읽는다. 하위 `claude.md`는 도구와 무관한 영역별 참조 문서다.

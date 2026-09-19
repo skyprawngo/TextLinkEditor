@@ -109,3 +109,5 @@ ATX/Setext 제목, 중첩 강조·취소선, 인용문·목록·체크리스트,
 서식 변경의 완료 순서는 `ManuscriptPresentationCoordinator` 하나가 소유한다: 속성 적용 → TextKit 재배치 → 화면 기준점 복원 → AppKit 선택/삽입 커서 갱신. `MarkdownPresentationController`는 구문 분석 캐시와 서식 속성만 결정한다. 커서를 먼저 갱신하고 이후 viewport를 이동하면 실제 `NSTextInsertionIndicator`가 이전 좌표에 남을 수 있으므로 이 순서를 분산시키지 않는다. 일반 도구의 기본 커서 보존과 별도로 표시 설정은 이 coordinator가 복원을 맡아 중복 복원을 피한다.
 
 `tests/native_cursor_regression.py`는 클릭/화살표 이동과 116행의 화면 높이 60% 유지 조건을 검증한다. 실제 깜빡이는 커서는 `tests/native_caret_ui.py --output /tmp/TextlinkCaretValidation.app`로 별도 검증 앱을 빌드해 클릭·스크롤·서식 전환하며 확인한다. 활성 창의 실제 `NSTextInsertionIndicator` 프레임을 먼저 읽고 TextKit 선택 segment와 비교하며 `/tmp/textlink-caret-validation.log`에 결과를 기록한다. 비활성 테스트 창의 논리 좌표 검사만으로 실제 커서 표시 성공을 판정하지 않는다.
+
+`Session/EditorRecoveryWriter`는 복구 저장의 직렬 큐와 완료 세대 번호를 소유한다. `EditorTabManager`는 문서 snapshot과 UI 상태를 소유하고 writer에 불변 저장 작업을 전달한다. 명시적 저장은 이전 자동 저장 뒤에서 완료되고 프로젝트 복원은 이전 완료 콜백을 무효화한다.

@@ -6,7 +6,7 @@ root = Path(__file__).resolve().parents[1]
 setup = (root / 'tests/native_editor_regression.py').read_text().split("\nharness = r'''", 1)[0]
 exec(compile(setup, __file__, 'exec'))
 prefix = prefix[:prefix.index('enum ShortcutAction')] + prefix[prefix.index('final class TextUndoHistoryManager'):]
-manager = (root / 'TextlinkEditor/Services/Core/KeyboardShortcutManager.swift').read_text()
+manager = (root / 'TextlinkEditor/Services/Core/KeyboardShortcutManager.swift').read_text() + '\n' + (root / 'TextlinkEditor/Services/Core/Shortcuts/ShortcutModels.swift').read_text()
 a = manager.index('    private var shortcutsFileURL: URL {')
 b = manager.index('    private var registrationObserver', a)
 manager = manager[:a] + '''    private var shortcutsFileURL: URL {
@@ -58,7 +58,7 @@ view.isEditable = true
 var controls: [String] = []
 view.onToolPresentation = { controls.append($0) }
 for tool in EditorToolRegistry.tools where tool.impact == .presentation { view.execute(EditorCommand(.tool(tool.id))) }
-expect(Set(controls) == ["font", "fontSize", "lineSpacing", "letterSpacing"], "registered parameter tools present their actual toolbar controls")
+expect(Set(controls) == ["markdownPreview", "font", "fontSize", "lineSpacing", "letterSpacing"], "registered parameter tools present their actual toolbar controls")
 var requests: [String] = []
 let observer = NotificationCenter.default.addObserver(forName: Notification.Name("aiDraftAction"), object: nil, queue: nil) { requests.append($0.object as! String) }
 for tool in EditorToolRegistry.tools where tool.category == .ai && tool.id != "ai.inline" && tool.id != "ai.attachSelection" {
@@ -78,6 +78,33 @@ manager.toggleEnabled(for: inline)
 expect(!view.performKeyEquivalent(with: key("l", [.command, .control])), "disabled inline key is not hardcoded")
 NotificationCenter.default.removeObserver(inlineObserver)
 expect(view.textLayoutManager != nil, "registered tools retain TextKit 2")
+var routed: [String] = []
+let routeObserver = NotificationCenter.default.addObserver(forName: EditorToolRegistry.executionRequested, object: nil, queue: nil) {
+    routed.append($0.object as! String)
+}
+for id in EditorToolID.allCases { expect(EditorToolRegistry.requestExecution(id.rawValue), "UI routing accepts registered ID") }
+expect(routed == EditorToolID.allCases.map(\.rawValue), "UI dispatch preserves each ID exactly once")
+expect(!EditorToolRegistry.requestExecution("unknown.tool") && routed.count == EditorToolID.allCases.count, "UI routing rejects unknown IDs before notification")
+NotificationCenter.default.removeObserver(routeObserver)
+// Registry identity and preflight contracts are shared by all UI entry points.
+expect(Set(EditorToolID.allCases.map(\.rawValue)).isSubset(of: Set(EditorToolRegistry.tools.map(\.id))), "every built-in ID resolves to one registered tool")
+expect(Set(EditorToolRegistry.tools.map(\.id)).count == EditorToolRegistry.tools.count, "tool IDs are unique")
+window.displayIfNeeded()
+view.toolBridge.cancelPending()
+events.removeAll()
+view.setSelectedRange(NSRange(location: 0, length: 0))
+for id in [EditorToolID.bold, .attachSelection, .collaborationComment] {
+    events.removeAll()
+    expect(EditorToolRegistry.perform(id.rawValue, on: view), "known tool is dispatched")
+    expect(events.count == 2 && events.first?.phase == .began && events.last?.phase == .ended && events.last?.outcome == .cancelled,
+           "missing selection ends once without executing a tool")
+}
+view.onToolPresentation = nil
+events.removeAll()
+EditorToolRegistry.perform(EditorToolID.font.rawValue, on: view)
+expect(events.count == 2 && events.last?.outcome == .cancelled, "missing presentation receiver is not reported as applied")
+events.removeAll()
+expect(!EditorToolRegistry.perform("unknown.tool", on: view) && events.isEmpty, "unknown ID has no side effects")
 print("TOOL REGISTRY REGRESSION COMPLETED")
 '''
 with tempfile.TemporaryDirectory(prefix='textlink-tool-registry-') as directory:
@@ -85,5 +112,5 @@ with tempfile.TemporaryDirectory(prefix='textlink-tool-registry-') as directory:
     adapter = directory/'KeyboardShortcutManager.swift'; adapter.write_text(manager)
     main = directory/'main.swift'; main.write_text(prefix + harness)
     executable = directory/'test'
-    subprocess.run(['swiftc','-O',*map(str,sources),str(adapter),str(main),'-o',str(executable)],check=True)
+    subprocess.run(['swiftc', *markdown_flags(),'-O',*map(str,sources),str(adapter),str(main),'-o',str(executable)],check=True)
     subprocess.run([str(executable),str(directory)],check=True)

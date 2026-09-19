@@ -19,13 +19,11 @@ import SwiftUI
 /// AI 어시스턴트 메인 뷰
 /// MainEditorView에서 우측 패널로 사용됨
 struct AIAssistantView: View {
-    var projectFolderURL: URL?
     /// 상세 뷰 모드 여부 바인딩 (외부에서 관찰 및 수정 가능)
     @Binding var isInDetailView: Bool
 
     var body: some View {
         AIAssistantContainerView(
-            projectFolderURL: projectFolderURL,
             isInDetailView: $isInDetailView
         )
     }

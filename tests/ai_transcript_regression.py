@@ -6,7 +6,7 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 source = (root / 'TextlinkEditor/Views/MainEditor/AIAssistant/Chat/AIChatView.swift').read_text()
-boundary = source[source.index('private struct AIChatTranscript:'):]
+boundary = (root / 'TextlinkEditor/Views/MainEditor/AIAssistant/Chat/AIChatTranscript.swift').read_text()
 boundary = boundary.replace('var body: some View {', 'var body: some View {\n        let _ = RenderCounter.bump()', 1)
 harness = r'''
 import AppKit
@@ -275,5 +275,5 @@ struct TestView: View {
 with tempfile.TemporaryDirectory(prefix='textlinkeditor-transcript-') as directory:
     path = Path(directory)
     (path / 'Test.swift').write_text(harness + '\n' + boundary)
-    subprocess.run(['xcrun', 'swiftc', '-parse-as-library', str(root / 'TextlinkEditor/Views/MainEditor/AIAssistant/Chat/AITranscriptScrollView.swift'), str(path / 'Test.swift'), '-o', str(path / 'test')], check=True)
+    subprocess.run(['xcrun', 'swiftc', '-parse-as-library', str(root / 'TextlinkEditor/Views/MainEditor/Layout/WorkspaceEnvironment.swift'), str(root / 'TextlinkEditor/Views/MainEditor/AIAssistant/Chat/AITranscriptScrollView.swift'), str(path / 'Test.swift'), '-o', str(path / 'test')], check=True)
     subprocess.run([str(path / 'test')], check=True, timeout=60)

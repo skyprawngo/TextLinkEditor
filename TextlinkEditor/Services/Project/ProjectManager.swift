@@ -17,8 +17,7 @@ final class ProjectManager {
     var recentProjects: [Project] = []
     var currentProject: Project?
 
-    private let recentProjectsKey = "recentProjects"
-    private let bookmarkDataKey = "projectBookmarks"
+    private let preferences = ProjectPreferencesStore()
     private let maxRecentProjects = 10
 
     /// Open panel delegate (강한 참조 유지)
@@ -60,89 +59,21 @@ final class ProjectManager {
 
     // MARK: - Security-Scoped Bookmarks
 
-    /// 폴더에 대한 Security-Scoped Bookmark 저장
-    private func saveBookmark(for url: URL) {
-        do {
-            let bookmarkData = try url.bookmarkData(
-                options: .withSecurityScope,
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil
-            )
-
-            var bookmarks = UserDefaults.standard.dictionary(forKey: bookmarkDataKey) as? [String: Data] ?? [:]
-            bookmarks[url.path] = bookmarkData
-            UserDefaults.standard.set(bookmarks, forKey: bookmarkDataKey)
-        } catch {
-            print("Failed to save bookmark: \(error)")
-        }
-    }
-
-    /// 저장된 Bookmark로 폴더 접근 권한 복원
-    private func restoreAccess(to url: URL) -> Bool {
-        guard let bookmarks = UserDefaults.standard.dictionary(forKey: bookmarkDataKey) as? [String: Data],
-              let bookmarkData = bookmarks[url.path] else {
-            return false
-        }
-
-        do {
-            var isStale = false
-            let resolvedURL = try URL(
-                resolvingBookmarkData: bookmarkData,
-                options: .withSecurityScope,
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            )
-
-            if isStale {
-                // Bookmark이 오래된 경우 새로 저장
-                saveBookmark(for: resolvedURL)
-            }
-
-            return resolvedURL.startAccessingSecurityScopedResource()
-        } catch {
-            print("Failed to restore access: \(error)")
-            return false
-        }
-    }
-
-    /// Security-Scoped Resource 접근 종료
-    func stopAccessing(_ url: URL) {
-        url.stopAccessingSecurityScopedResource()
-    }
+    private func saveBookmark(for url: URL) { preferences.saveBookmark(for: url) }
+    private func restoreAccess(to url: URL) -> Bool { preferences.restoreAccess(to: url) }
+    func stopAccessing(_ url: URL) { preferences.stopAccessing(url) }
 
     // MARK: - Recent Projects
 
-    private func loadRecentProjects() {
-        guard let data = UserDefaults.standard.data(forKey: recentProjectsKey),
-              let projects = try? JSONDecoder().decode([Project].self, from: data) else {
-            return
-        }
-        recentProjects = projects
-    }
+    private func loadRecentProjects() { recentProjects = preferences.loadRecentProjects() }
+    private func saveRecentProjects() { preferences.saveRecentProjects(recentProjects) }
 
-    private func saveRecentProjects() {
-        guard let data = try? JSONEncoder().encode(recentProjects) else { return }
-        UserDefaults.standard.set(data, forKey: recentProjectsKey)
-    }
-
-    /// 최근 프로젝트 목록에서 존재하지 않는 프로젝트 제거
     private func validateRecentProjects() {
         // Offline volumes and temporary permission failures must not erase bookmarks.
         recentProjects.removeAll { $0.path == nil }
     }
 
-    /// 존재하지 않는 프로젝트의 북마크 데이터 제거
-    private func removeBookmarks(for paths: [String]) {
-        guard var bookmarks = UserDefaults.standard.dictionary(forKey: bookmarkDataKey) as? [String: Data] else {
-            return
-        }
-
-        for path in paths {
-            bookmarks.removeValue(forKey: path)
-        }
-
-        UserDefaults.standard.set(bookmarks, forKey: bookmarkDataKey)
-    }
+    private func removeBookmarks(for paths: [String]) { preferences.removeBookmarks(for: paths) }
 
     // MARK: - Project Operations
 

@@ -14,83 +14,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-// MARK: - Toolbar Search Field
-
-final class ToolbarNativeSearchField: NSSearchField {
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard let window else { return }
-        DispatchQueue.main.async { [weak self, weak window] in
-            guard let self, let window, self.window === window else { return }
-            window.makeFirstResponder(self)
-        }
-    }
-}
-
-/// 툴바용 NSSearchField 래퍼
-struct ToolbarSearchField: NSViewRepresentable {
-    @Binding var text: String
-    var prompt: String
-    var onSearch: () -> Void = {}
-    var onCancel: () -> Void = {}
-
-    func makeNSView(context: Context) -> NSSearchField {
-        let searchField = ToolbarNativeSearchField()
-        searchField.placeholderString = prompt
-        searchField.delegate = context.coordinator
-        searchField.bezelStyle = .roundedBezel
-        searchField.focusRingType = .none
-        DispatchQueue.main.async { [weak searchField] in
-            guard let searchField else { return }
-            searchField.window?.makeFirstResponder(searchField)
-        }
-        return searchField
-    }
-
-    func updateNSView(_ nsView: NSSearchField, context: Context) {
-        context.coordinator.onSearch = onSearch
-        context.coordinator.onCancel = onCancel
-        if nsView.stringValue != text {
-            nsView.stringValue = text
-        }
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, onSearch: onSearch)
-    }
-
-    class Coordinator: NSObject, NSSearchFieldDelegate {
-        @Binding var text: String
-
-        var onCancel: () -> Void = {}
-        var onSearch: () -> Void
-        init(text: Binding<String>, onSearch: @escaping () -> Void) {
-            _text = text
-            self.onSearch = onSearch
-        }
-        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            if commandSelector == #selector(NSResponder.cancelOperation(_:)) { onCancel(); return true }
-            if commandSelector == #selector(NSResponder.insertNewline(_:)) { onSearch(); return true }
-            return false
-        }
-
-        func controlTextDidEndEditing(_ notification: Notification) {
-            guard let field = notification.object as? NSSearchField else { return }
-            // Let AppKit finish transferring the responder before removing the field.
-            DispatchQueue.main.async { [weak self, weak field] in
-                guard let field, field.currentEditor() == nil,
-                      field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                self?.onCancel()
-            }
-        }
-
-        func controlTextDidChange(_ obj: Notification) {
-            guard let searchField = obj.object as? NSSearchField else { return }
-            text = searchField.stringValue
-        }
-    }
-}
-
 private struct VersionPresentation: Identifiable {
     let id = UUID()
     let project: URL
@@ -115,7 +38,6 @@ struct MainEditorView: View {
     @State private var git = ProjectGitModel()
 
     // AI 패널 크기
-    @State private var panelDragStartWidth: CGFloat?
     @State private var aiPanelWidth = UserSettings.shared.aiAssistantPanelWidth
     @State private var projectSearchPresentation: ProjectSearchPresentation?
     @State private var showingNewProject = false
@@ -138,9 +60,12 @@ struct MainEditorView: View {
     @State private var editorWidth: CGFloat = 800
     @State private var sidebarWidth: CGFloat = 250
 
-    private var resolvedAIPanelWidth: CGFloat {
-        min(aiPanelWidth, max(280, windowWidth - (columnVisibility == .detailOnly ? 0 : sidebarWidth) - 360))
+    private var panelLayout: WorkspacePanelLayout {
+        WorkspacePanelLayout(windowWidth: windowWidth, sidebarWidth: sidebarWidth,
+                             sidebarVisible: columnVisibility != .detailOnly)
     }
+
+    private var resolvedAIPanelWidth: CGFloat { panelLayout.resolve(aiPanelWidth) }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -159,28 +84,11 @@ struct MainEditorView: View {
             .navigationSplitViewStyle(.balanced)
 
             // AI 패널 (우측)
-            HStack(spacing: 0) {
-                Rectangle().fill(AppColors.separator).frame(width: 1)
-                    .padding(.horizontal, 3)
-                    .background(PanelResizeCursorRegion())
-                    .contentShape(Rectangle())
-                    .gesture(DragGesture(coordinateSpace: .global).onChanged { value in
-                        if panelDragStartWidth == nil { panelDragStartWidth = resolvedAIPanelWidth }
-                        let maximum = min(600, max(280, windowWidth - (columnVisibility == .detailOnly ? 0 : sidebarWidth) - 360))
-                        let width = min(maximum, max(280, (panelDragStartWidth ?? resolvedAIPanelWidth) - value.translation.width)).rounded()
-                        if aiPanelWidth != width {
-                            var transaction = Transaction()
-                            transaction.disablesAnimations = true
-                            withTransaction(transaction) { aiPanelWidth = width }
-                        }
-                    }.onEnded { _ in
-                        UserSettings.shared.aiAssistantPanelWidth = aiPanelWidth
-                        panelDragStartWidth = nil
-                    })
+            WorkspaceAIPanel(preferredWidth: $aiPanelWidth, layout: panelLayout, isVisible: isAIPanelVisible,
+                             onResizeEnded: { UserSettings.shared.aiAssistantPanelWidth = $0 }) {
                 // Hiding a panel must not recreate its account/chat state or cancel its request.
                 ZStack {
                     AIAssistantView(
-                    projectFolderURL: projectManager.currentProject?.path,
                     isInDetailView: $isAIDetailView
                     )
                     .offset(x: assistant.collaboration.showingPanel && !reduceMotion ? resolvedAIPanelWidth : 0)
@@ -197,16 +105,7 @@ struct MainEditorView: View {
                     }
                 }
                 .animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.28), value: assistant.collaboration.showingPanel)
-                .frame(width: resolvedAIPanelWidth)
-                .clipped()
-                .environment(\.aiPanelIsResizing, panelDragStartWidth != nil)
             }
-            .frame(width: resolvedAIPanelWidth + 7)
-            // Keep the panel alive, but resize the editor once rather than on every animation frame.
-            .frame(width: isAIPanelVisible ? resolvedAIPanelWidth + 7 : 0, alignment: .trailing)
-            .clipped()
-            .accessibilityHidden(!isAIPanelVisible)
-            .allowsHitTesting(isAIPanelVisible)
         }
         .background(ThemeAwareBackground(material: .sidebar, blendingMode: .behindWindow, tintOpacity: 0.22)
             .ignoresSafeArea(edges: .top))
@@ -349,11 +248,11 @@ struct MainEditorView: View {
             Button(L10n.common.confirm) { fileSystemManager.operationError = nil }
         } message: { Text(fileSystemManager.operationError ?? "") }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("aiDraftAction"))) { notification in
+            guard let instruction = notification.object as? String else { return }
+            assistant.setProject(projectManager.currentProject?.path)
             assistant.collaboration.showingPanel = false
-            if !isAIPanelVisible {
-                isAIPanelVisible = true
-                DispatchQueue.main.async { NotificationCenter.default.post(notification) }
-            }
+            assistant.prepareDraftAction(instruction)
+            isAIPanelVisible = true
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("collaborationCommentRequested"))) { _ in
             assistant.setProject(projectManager.currentProject?.path)
@@ -387,11 +286,15 @@ struct MainEditorView: View {
         .onDisappear {
             git.setProject(nil)
             assistant.setProject(nil)
+            assistant.chatGPTAccount.cancelLogin()
             fileSystemManager.closeProject()
         }
-        .onChange(of: projectManager.currentProject?.path) { _, path in
-            git.setProject(path)
-            assistant.setProject(path)
+        .onChange(of: projectManager.currentProject?.path) { _, _ in
+            initializeFileSystem()
+            contextProject = nil
+            writingProject = nil
+            versionsDocument = nil
+            projectSearchPresentation = nil
         }
         .onChange(of: assistant.collaboration.showingPanel) { _, showing in
             if showing { isAIPanelVisible = true }
@@ -410,10 +313,12 @@ struct MainEditorView: View {
     // MARK: - File System
 
     private func initializeFileSystem() {
-        guard let projectPath = projectManager.currentProject?.path else { return }
+        let projectPath = projectManager.currentProject?.path
         assistant.setProject(projectPath)
         git.setProject(projectPath)
-        fileSystemManager.initializeProject(at: projectPath)
+        guard fileSystemManager.projectRootURL != projectPath else { return }
+        if let projectPath { fileSystemManager.initializeProject(at: projectPath) }
+        else { fileSystemManager.closeProject() }
     }
 
     // MARK: - Navigation
@@ -424,153 +329,6 @@ struct MainEditorView: View {
 
     private func goForward() {
         tabManager.goForward()
-    }
-}
-
-// MARK: - App Command Handler Modifier
-
-/// 앱 커맨드 핸들러를 통합한 ViewModifier
-struct AppCommandHandlerModifier: ViewModifier {
-    let appCommands: AppCommands
-    let tabManager: EditorTabManager
-    let fileSystemManager: FileSystemManager
-    let projectManager: ProjectManager
-    @Binding var isAIPanelVisible: Bool
-    @Binding var columnVisibility: NavigationSplitViewVisibility
-    let onInitializeFileSystem: () -> Void
-
-    func body(content: Content) -> some View {
-        content
-            // 탭 관련 커맨드
-            .onReceive(appCommands.$closeTabRequested) { requested in
-                if requested {
-                    tabManager.closeCurrentTab()
-                    appCommands.closeTabRequested = false
-                }
-            }
-            .onReceive(appCommands.$closeAllTabsRequested) { requested in
-                if requested {
-                    tabManager.closeAllTabs()
-                    appCommands.closeAllTabsRequested = false
-                }
-            }
-            .onReceive(appCommands.$nextTabRequested) { requested in
-                if requested {
-                    tabManager.selectNextTab()
-                    appCommands.nextTabRequested = false
-                }
-            }
-            .onReceive(appCommands.$previousTabRequested) { requested in
-                if requested {
-                    tabManager.selectPreviousTab()
-                    appCommands.previousTabRequested = false
-                }
-            }
-            .onReceive(appCommands.$goToTabRequested) { tabIndex in
-                if let index = tabIndex {
-                    tabManager.selectTab(at: index - 1)
-                    appCommands.goToTabRequested = nil
-                }
-            }
-            // UI 토글 커맨드
-            .onReceive(appCommands.$toggleSidebarRequested) { requested in
-                if requested {
-                    columnVisibility = columnVisibility == .all ? .detailOnly : .all
-                    appCommands.toggleSidebarRequested = false
-                }
-            }
-            .onReceive(appCommands.$toggleAIPanelRequested) { requested in
-                if requested {
-                    isAIPanelVisible.toggle()
-                    appCommands.toggleAIPanelRequested = false
-                }
-            }
-            // 파일/폴더 커맨드
-            .onReceive(appCommands.$newFileRequested) { requested in
-                if requested {
-                    if let rootItem = fileSystemManager.targetDirectoryForNewFile {
-                        fileSystemManager.showNewFileDialog(in: rootItem) { _ in }
-                    }
-                    appCommands.newFileRequested = false
-                }
-            }
-            .onReceive(appCommands.$newFolderRequested) { requested in
-                if requested {
-                    if let rootItem = fileSystemManager.projectRoot {
-                        fileSystemManager.showNewFolderDialog(in: rootItem) { _ in }
-                    }
-                    appCommands.newFolderRequested = false
-                }
-            }
-            .onReceive(appCommands.$refreshProjectRequested) { requested in
-                if requested {
-                    fileSystemManager.refreshProject()
-                    appCommands.refreshProjectRequested = false
-                }
-            }
-            .onReceive(appCommands.$openFileRequested) { requested in
-                if requested {
-                    handleOpenFile()
-                    appCommands.openFileRequested = false
-                }
-            }
-            .onReceive(appCommands.$openProjectRequested) { requested in
-                if requested {
-                    handleOpenProject()
-                    appCommands.openProjectRequested = false
-                }
-            }
-    }
-
-    private func handleOpenFile() {
-        let panel = NSOpenPanel()
-        panel.title = L10n.get("shortcut.file.open")
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = [.text, .plainText, .utf8PlainText]
-
-        if let projectPath = projectManager.currentProject?.path {
-            panel.directoryURL = projectPath
-        }
-
-        guard panel.runModal() == .OK else { return }
-
-        for url in panel.urls {
-            let fileItem = FileSystemItem(url: url, isDirectory: false)
-            tabManager.openFile(fileItem)
-        }
-    }
-
-    private func handleOpenProject() {
-        guard let url = projectManager.showOpenPanel() else { return }
-
-        // 새 프로젝트 열기 (openProjectFromFile 내부에서 세션 복원됨)
-        if projectManager.openProjectFromFile(at: url) != nil {
-            onInitializeFileSystem()
-        }
-    }
-}
-
-extension View {
-    func appCommandHandler(
-        appCommands: AppCommands,
-        tabManager: EditorTabManager,
-        fileSystemManager: FileSystemManager,
-        projectManager: ProjectManager,
-        isAIPanelVisible: Binding<Bool>,
-        columnVisibility: Binding<NavigationSplitViewVisibility>,
-        onInitializeFileSystem: @escaping () -> Void
-    ) -> some View {
-        modifier(AppCommandHandlerModifier(
-            appCommands: appCommands,
-            tabManager: tabManager,
-            fileSystemManager: fileSystemManager,
-            projectManager: projectManager,
-            isAIPanelVisible: isAIPanelVisible,
-            columnVisibility: columnVisibility,
-            onInitializeFileSystem: onInitializeFileSystem
-        ))
     }
 }
 

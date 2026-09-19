@@ -24,7 +24,7 @@ final class FileSystemManager {
     private var fileEventObserver: NSObjectProtocol?
     var operationError: String?
     var revision = 0
-    private var directoryWatchers: [String: DispatchSourceFileSystemObject] = [:]
+    private let directoryWatchers = DirectoryWatchRegistry()
 
     /// 프로젝트 루트 URL
     private(set) var projectRootURL: URL?
@@ -442,33 +442,19 @@ final class FileSystemManager {
     }
 
     private func watchDirectory(_ item: FileSystemItem) {
-        let path = item.url.path
-        guard directoryWatchers[path] == nil else { return }
-        let fd = open(path, O_EVTONLY)
-        guard fd >= 0 else { return }
+        let url = item.url
         let owner = projectRootURL
-        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .delete, .rename], queue: .main)
-        source.setEventHandler { [weak self, weak item] in
+        directoryWatchers.watch(url) { [weak self, weak item] in
             guard let self, let item, self.projectRootURL == owner,
-                  self.directoryWatchers[path] != nil, item.url.path == path else { return }
+                  self.directoryWatchers.contains(url), item.url == url else { return }
             self.files.events.publish(.init(url: item.url, change: .invalidated))
             self.loadChildren(of: item)
         }
-        source.setCancelHandler { close(fd) }
-        directoryWatchers[path] = source
-        source.resume()
     }
 
-    private func stopWatching() {
-        for source in directoryWatchers.values { source.cancel() }
-        directoryWatchers.removeAll()
-    }
+    private func stopWatching() { directoryWatchers.stopAll() }
 
-    private func stopWatching(under url: URL) {
-        for path in Array(directoryWatchers.keys) where DocumentFileStore.contains(URL(fileURLWithPath: path), in: url) {
-            directoryWatchers.removeValue(forKey: path)?.cancel()
-        }
-    }
+    private func stopWatching(under url: URL) { directoryWatchers.stop(under: url) }
 
     /// 파일 시스템 변경 처리
     private func handleFileSystemChange() {

@@ -221,8 +221,8 @@ struct EditorContainerView: View {
             guard let url = currentFileURL, !isLoading, loadError == nil, tabManager.findTab(with: url) != nil else { return }
             tabManager.setCachedCursorPosition(line: cursorLine - 1, column: cursorColumn, for: url)
         }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("executeEditorTool"))) { notification in
-            guard let id = notification.object as? String else { return }
+        .onReceive(NotificationCenter.default.publisher(for: EditorToolRegistry.executionRequested)) { notification in
+            guard let id = notification.object as? String, EditorToolRegistry.definition(id) != nil else { return }
             editCommand = EditorCommand(.tool(id))
         }
         .onReceive(NotificationCenter.default.publisher(for: EditorAppearanceStore.defaultsChanged)) { _ in
@@ -286,9 +286,7 @@ struct EditorContainerView: View {
             appCommands.searchInDocument = nil
             findText = query
             showingFind = true
-            DispatchQueue.main.async {
-                editCommand = EditorCommand(resultLine.map { .locate(line: $0, query: query) } ?? .find(query, forward: true))
-            }
+            editCommand = EditorCommand(resultLine.map { .locate(line: $0, query: query) } ?? .find(query, forward: true))
         }
         .onReceive(appCommands.$saveRequested) { requested in
             if requested {

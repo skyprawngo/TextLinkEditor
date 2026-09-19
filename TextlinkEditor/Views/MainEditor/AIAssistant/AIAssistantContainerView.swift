@@ -12,7 +12,6 @@ struct AIAssistantContainerView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var aiAssistantEnabled = UserSettings.shared.aiAssistantEnabled
 
-    var projectFolderURL: URL?
     /// 상세 뷰 모드 여부 바인딩 (외부에서 관찰 및 수정 가능)
     @Binding var isInDetailView: Bool
 
@@ -40,9 +39,6 @@ struct AIAssistantContainerView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { viewModel.setProject(projectFolderURL) }
-        .onDisappear { viewModel.chatGPTAccount.cancelLogin() }
-        .onChange(of: projectFolderURL) { _, newValue in viewModel.setProject(newValue) }
         .onChange(of: viewModel.chatGPTAccount.account) { _, account in
             guard viewModel.selectedCLIType == .chatgpt else { return }
             if account != nil {
@@ -65,10 +61,6 @@ struct AIAssistantContainerView: View {
                     viewModel.selectedCardId = nil
                 }
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("aiDraftAction"))) { notification in
-            guard let instruction = notification.object as? String else { return }
-            viewModel.prepareDraftAction(instruction)
         }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
             syncWithUserSettings()

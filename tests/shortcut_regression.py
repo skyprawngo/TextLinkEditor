@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
-source = (root / 'TextlinkEditor/Services/Core/KeyboardShortcutManager.swift').read_text()
+source = (root / 'TextlinkEditor/Services/Core/KeyboardShortcutManager.swift').read_text() + '\n' + (root / 'TextlinkEditor/Services/Core/Shortcuts/ShortcutModels.swift').read_text()
 source += '\n' + (root / 'TextlinkEditor/Services/FileSystem/SidebarPathCopy.swift').read_text()
 start = source.index('    private var shortcutsFileURL: URL {')
 end = source.index('    private var registrationObserver', start)

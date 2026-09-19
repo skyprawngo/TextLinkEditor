@@ -16,6 +16,10 @@
 
 ## Undo 소유권
 
-원고는 문서 ID별 `EditorState` 자체 이력을 사용한다. AI 입력은 `AIChatView`의 `NSTextView` 기본 UndoManager를 사용하며, 외부에서 입력 내용을 바꿀 때 이력을 초기화한다. 남아 있는 `UndoSystem.swift`를 현재 AI 입력의 실행 경로로 가정하지 않는다.
+현재 네이티브 원고는 `NativeManuscriptTextView`의 AppKit UndoManager를 사용한다. 비교용 이전 엔진의 `EditorState` 이력은 별도 경로다. AI 입력은 `MultiLineInputView`의 `NSTextView` 기본 UndoManager를 사용하며, 외부에서 입력 내용을 바꿀 때 이력을 초기화한다. 남아 있는 `UndoSystem.swift`를 현재 AI 입력의 실행 경로로 가정하지 않는다.
 
 Edit 메뉴의 `undo:`/`redo:`가 실제 first responder에 도달해야 한다. 조합 중 IME 처리와 편집 알림을 통해 화면·binding·전송 문자열이 함께 갱신되는지도 확인한다. 원고 Undo의 액션 표현은 [Editor](../Editor/claude.md)와 텍스트 엔진에 있다.
+
+설정 값 모델과 표시 기본값은 `Preferences/`, 단축키 값 모델은 `Shortcuts/ShortcutModels.swift`에 둔다. `UserSettings`와 `KeyboardShortcutManager`가 기존 저장 도메인과 마이그레이션을 계속 소유한다. 호환 Undo의 값 모델·텍스트 이력·일반 상태 이력은 `Undo/`에, 영역별 이력 선택은 `UndoSystem.swift`에 있다.
+
+내장 도구의 문자열 ID는 `EditorToolID`가 정의한다. 선택이 필요한 도구는 definition의 `requiresSelection`에 선언하고, 메뉴 요청은 `EditorToolRegistry.requestExecution`을 사용한다. 실행 수명은 began → validated → applied → 배치 완료(필요 시) → ended이며, 전달 성공과 실행 결과를 구분한다. 전체 호출 경계는 `docs/tool-execution.md`를 참고한다.

@@ -2,12 +2,14 @@
 from pathlib import Path
 import subprocess,tempfile
 root=Path(__file__).resolve().parents[1]
-s=(root/'TextlinkEditor/Views/MainEditor/AIAssistant/Chat/AIChatView.swift').read_text()
+s=(root/'TextlinkEditor/Views/MainEditor/AIAssistant/Chat/MultiLineInputView.swift').read_text()
 s=s[s.index('struct MultiLineInputView:'):s.index('// MARK: - 대화 카드 뷰')]
 # NSViewRepresentable.Context has no public initializer. Replace only construction signature.
 s=s.replace('struct MultiLineInputView: NSViewRepresentable','struct MultiLineInputView').replace('context: Context','coordinator: Coordinator').replace('context.coordinator','coordinator')
+s += '\n' + (root/'TextlinkEditor/Services/AI/Requests/AIChatMode.swift').read_text()
 prefix='''import AppKit
 import SwiftUI
+enum L10n { static func get(_ key: String) -> String { key } }
 enum AppColors { static let textPrimary = Color.primary; static let accent = Color.blue }
 '''
 harness='''

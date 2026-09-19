@@ -92,23 +92,23 @@ struct EditorToolbarView: View {
         }.fixedSize()
     }
 
-    private func formatButton(_ icon: String, _ title: String, _ format: MarkdownFormatType) -> some View {
-        Button { onToolAction?("format.\(format)") } label: {
+    private func formatButton(_ icon: String, _ title: String, _ tool: EditorToolID) -> some View {
+        Button { onToolAction?(tool.rawValue) } label: {
             Image(systemName: icon).font(.system(size: iconSize)).frame(width: 26, height: 26)
         }
         .buttonStyle(.borderless)
-        .help(shortcuts.toolHelpText("format.\(format)"))
+        .help(shortcuts.toolHelpText(tool.rawValue))
         .accessibilityLabel(title)
     }
 
     private var markdownPreviewButton: some View {
-        Button { onToolAction?("display.markdownPreview") } label: {
+        Button { onToolAction?(EditorToolID.markdownPreview.rawValue) } label: {
             Image(systemName: isMarkdownPreview ? "chevron.left.forwardslash.chevron.right" : "textformat")
                 .font(.system(size: iconSize)).frame(width: 26, height: 26)
                 .foregroundStyle(isMarkdownPreview ? Color.accentColor : Color.primary)
         }
         .buttonStyle(.borderless)
-        .help(shortcuts.toolHelpText("display.markdownPreview"))
+        .help(shortcuts.toolHelpText(EditorToolID.markdownPreview.rawValue))
         .accessibilityLabel(L10n.get("editor.markdown.toggle"))
         .accessibilityValue(L10n.get(isMarkdownPreview ? "editor.markdown.preview" : "editor.markdown.source"))
     }
@@ -144,7 +144,7 @@ private struct FontSizeControl: View {
             Text("pt").font(.system(size: numberSize)).foregroundStyle(.secondary)
         }
         .fixedSize()
-        .help(shortcuts.toolHelpText("display.fontSize"))
+        .help(shortcuts.toolHelpText(EditorToolID.fontSize.rawValue))
     }
 }
 
@@ -162,7 +162,7 @@ private struct LetterSpacingControl: View {
             ScrubbableNumberField(title: L10n.get("editor.letterSpacing"), value: value, range: -5...20, step: 0.1)
         }
         .fixedSize()
-        .help(shortcuts.toolHelpText("display.letterSpacing"))
+        .help(shortcuts.toolHelpText(EditorToolID.letterSpacing.rawValue))
     }
 }
 
@@ -261,7 +261,7 @@ private struct LineSpacingControl: View {
         .labelsHidden()
         .buttonStyle(.borderless)
         .fixedSize(horizontal: true, vertical: false)
-        .help(shortcuts.toolHelpText("display.lineSpacing"))
+        .help(shortcuts.toolHelpText(EditorToolID.lineSpacing.rawValue))
     }
 }
 
@@ -285,7 +285,7 @@ struct FontPickerControl: View {
                 .frame(width: labelWidth, alignment: .leading)
         }
         .buttonStyle(.borderless)
-        .help(shortcuts.toolHelpText("display.font"))
+        .help(shortcuts.toolHelpText(EditorToolID.font.rawValue))
         .accessibilityLabel(L10n.get("settings.editor.fontName"))
         .accessibilityValue(fontName)
     }

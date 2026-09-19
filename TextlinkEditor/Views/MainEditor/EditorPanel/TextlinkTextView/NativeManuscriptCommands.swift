@@ -11,7 +11,11 @@ extension NativeManuscriptTextView {
         case .presentation: effects = []; category = .presentation
         case .request: effects = []; category = .assistant
         }
-        toolBridge.perform(.init(name: definition.id, category: category, effects: effects)) {
+        let hasRequiredSelection = !definition.requiresSelection || selectedRange().length > 0
+        let canPresent = definition.impact != .presentation || onToolPresentation != nil
+        let canToggleInline = definition.id != EditorToolID.inline.rawValue || isEditable || inlinePanel != nil
+        toolBridge.perform(.init(name: definition.id, category: category, effects: effects),
+                           isAvailable: hasRequiredSelection && canPresent && canToggleInline) {
             let generation = self.textEditGeneration
             let selection = self.selectedRange()
             let panel = self.inlinePanel

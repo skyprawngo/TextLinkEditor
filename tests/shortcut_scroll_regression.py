@@ -5,9 +5,9 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
-source = (root / "TextlinkEditor/Views/SettingsView.swift").read_text()
+source = (root / "TextlinkEditor/Views/Settings/ShortcutsSettingsView.swift").read_text()
 start = source.index("private struct ShortcutTableScrollBoundary:")
-end = source.index("// MARK: - Shortcut Edit Sheet", start)
+end = len(source)
 helper = source[start:end]
 harness = r'''
 struct Row: Identifiable { let id: Int }
